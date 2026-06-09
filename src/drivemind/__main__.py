@@ -5,11 +5,19 @@ import os
 import subprocess
 import sys
 
+from pathlib import Path
+
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from drivemind.core.config import ConfigManager
 from drivemind.ui.main_window import MainWindow
+from drivemind.ui.theme import apply_theme
 from drivemind.version import APP_NAME
+
+
+def app_asset_path(name: str) -> Path:
+    return Path(__file__).resolve().parent / "assets" / name
 
 
 def _is_windows_admin() -> bool:
@@ -53,6 +61,14 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName("S2OUnicus")
+    runtime_config = ConfigManager()
+    apply_theme(app, str(runtime_config.get("basic.theme", "dark")))
+    icon_path = app_asset_path("logo_pure.ico")
+    icon = QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+    if icon.isNull():
+        icon = QIcon(str(app_asset_path("logo.ico")))
+    if not icon.isNull():
+        app.setWindowIcon(icon)
     window = MainWindow()
     window.show()
     return app.exec()

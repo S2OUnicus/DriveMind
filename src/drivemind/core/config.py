@@ -25,12 +25,23 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "config_file_path": "",
         "capacity_decimals": 2,
         "percent_decimals": 2,
+        # GUI表示言語とテーマ。初期値は日本語 / darkmode です。
+        "language": "ja",
+        "theme": "dark",
         # システムパーティションを含む物理ディスクは内部ドライブとして扱います。
         "treat_system_disk_as_internal": True,
         # ESP / MSR / OEM パーティションは初期値では表示しません。
         "show_esp_partitions": False,
         "show_msr_partitions": False,
         "show_oem_partitions": False,
+        # 読み取り専用パーティションは初期値では表示します。
+        "show_readonly_partitions": True,
+        # 隠れたパーティションは初期値では表示しません。
+        "show_hidden_partitions": False,
+        # RAM ディスク / WebDisk / ネットワーク共有ドライブは初期値では表示しません。
+        "show_ram_disks": False,
+        "show_web_disks": False,
+        "show_remote_disks": False,
         # 必要な場合だけ管理者権限で起動します。
         "run_as_admin": False,
     },
@@ -74,6 +85,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "sort_desc": False,
     },
     "drive_notes": {},
+    # 物理ディスク単位の手動分類。device_key -> {"is_internal": bool}
+    "device_overrides": {},
     "runtime": {
         "last_export_path": "",
     },
@@ -168,6 +181,21 @@ class ConfigManager:
                 cur[part] = {}
             cur = cur[part]
         cur[parts[-1]] = value
+
+    def reset_section(self, section: str) -> None:
+        """指定した設定セクションを初期値へ戻します。"""
+        if section in DEFAULT_SETTINGS:
+            self.settings[section] = deepcopy(DEFAULT_SETTINGS[section])
+
+    def device_override(self, key: str) -> dict[str, Any]:
+        overrides = self.settings.setdefault("device_overrides", {})
+        return overrides.setdefault(key, {})
+
+    def set_device_internal_override(self, key: str, is_internal: bool) -> None:
+        self.device_override(key)["is_internal"] = bool(is_internal)
+
+    def clear_device_override(self, key: str) -> None:
+        self.settings.setdefault("device_overrides", {}).pop(key, None)
 
     def drive_note(self, key: str) -> dict[str, Any]:
         notes = self.settings.setdefault("drive_notes", {})

@@ -8,7 +8,7 @@ import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QDate, QObject, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QPalette
+from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPixmap, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QComboBox,
+    QToolButton,
     QFrame,
     QSpinBox,
     QSplitter,
@@ -31,6 +33,7 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QStyledItemDelegate,
 )
 
 from drivemind.core.config import ConfigManager
@@ -38,13 +41,86 @@ from drivemind.core.disk_scanner import DriveScanner
 from drivemind.core.mindmap import MindmapExporter
 from drivemind.core.models import DeviceInfo, DiskSnapshot, VolumeInfo
 from drivemind.core.update_checker import UpdateResult, check_latest_release, should_check_update, today_iso
-from drivemind.version import APP_TITLE, GITHUB_RELEASES_URL, __version__
+from drivemind.version import APP_NAME, APP_TITLE, GITHUB_OWNER, GITHUB_PROJECT_URL, GITHUB_RELEASES_URL, __version__
 from drivemind.ui.info_dialog import InfoDialog
 from drivemind.ui.partition_info_dialog import PartitionInfoDialog
 from drivemind.ui.progress_bar import DiskUsageBar
 from drivemind.ui.settings_dialog import SettingsDialog
 from drivemind.ui.widgets import LongPressButton
+from drivemind.ui.i18n import LANGUAGES, tr
+from drivemind.ui.theme import apply_theme
 
+
+
+
+def asset_path(name: str) -> Path:
+    return Path(__file__).resolve().parents[1] / "assets" / name
+
+
+def windows_no_console_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
+def popen_hidden(args: list[str]) -> subprocess.Popen:
+    return subprocess.Popen(args, close_fds=True, **windows_no_console_kwargs())
+
+
+class EditableColumnsDelegate(QStyledItemDelegate):
+    """メイン一覧で指定した列だけ編集可能にするデリゲートです。"""
+
+    def __init__(self, editable_columns: set[int], parent=None) -> None:
+        super().__init__(parent)
+        self.editable_columns = set(editable_columns)
+
+    def createEditor(self, parent, option, index):  # noqa: N802
+        if index.column() not in self.editable_columns:
+            return None
+        item = self.parent().itemFromIndex(index) if hasattr(self.parent(), "itemFromIndex") else None
+        if item is not None and item.parent() is None:
+            return None
+        return super().createEditor(parent, option, index)
+
+
+class AboutDialog(QDialog):
+    def __init__(self, language: str = "ja", parent=None) -> None:
+        super().__init__(parent)
+        self.language = language
+        self.setWindowTitle(tr(language, "about_title"))
+        self.setFixedWidth(470)
+        root = QVBoxLayout(self)
+        logo_label = QLabel(self)
+        icon = QIcon(str(asset_path("logo.ico")))
+        if not icon.isNull():
+            logo_label.setPixmap(icon.pixmap(180, 180))
+        logo_label.setAlignment(Qt.AlignCenter)
+        root.addWidget(logo_label)
+        title = QLabel(f"<h2>{APP_NAME}</h2>", self)
+        title.setAlignment(Qt.AlignCenter)
+        root.addWidget(title)
+        info = QLabel(
+            f"{tr(language, 'app_title')}<br>"
+            f"{tr(language, 'about_version')}: v{__version__}<br>"
+            f"{tr(language, 'about_author')}: @{GITHUB_OWNER}<br>"
+            f"{tr(language, 'about_license')}: CC-BY-NC-ND-4.0<br>"
+            f"{tr(language, 'about_project')}: <a href=\"{GITHUB_PROJECT_URL}\">{GITHUB_PROJECT_URL}</a>",
+            self,
+        )
+        info.setTextFormat(Qt.RichText)
+        info.setOpenExternalLinks(True)
+        info.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        info.setAlignment(Qt.AlignCenter)
+        root.addWidget(info)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok, self)
+        buttons.button(QDialogButtonBox.Ok).setText(tr(language, "about_close"))
+        buttons.accepted.connect(self.accept)
+        root.addWidget(buttons)
 
 class UpdateWorker(QObject):
     finished = Signal(object)
@@ -148,7 +224,14 @@ class MainWindow(QMainWindow):
             self._sort_column = self.COL_DRIVE
         self._sort_desc = bool(self.config.get("ui.sort_desc", False))
 
-        self.setWindowTitle(f"{APP_TITLE} v{__version__}")
+        self.language = str(self.config.get("basic.language", "ja"))
+        self.setWindowTitle(f"{tr(self.language, 'app_title')} v{__version__}")
+        icon_path = asset_path("logo_pure.ico")
+        icon = QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+        if icon.isNull():
+            icon = QIcon(str(asset_path("logo.ico")))
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.resize(1280, 760)
         self._build_ui()
         self._restore_header_state()
@@ -165,6 +248,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1500, self._maybe_startup_update_check)
 
     def _build_ui(self) -> None:
+        self._build_menu()
         central = QWidget(self)
         root = QVBoxLayout(central)
         splitter = QSplitter(Qt.Vertical, central)
@@ -184,6 +268,8 @@ class MainWindow(QMainWindow):
         self.tree.customContextMenuRequested.connect(self._show_tree_context_menu)
         self.tree.itemChanged.connect(self._on_item_changed)
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        # グループ・用途・メモ以外の列は編集できないようにします。
+        self.tree.setItemDelegate(EditableColumnsDelegate({self.COL_GROUP, self.COL_PURPOSE, self.COL_MEMO}, self.tree))
         header = self.tree.header()
         header.setSectionsMovable(True)
         header.setStretchLastSection(False)
@@ -210,17 +296,17 @@ class MainWindow(QMainWindow):
         bars_box.addWidget(self.external_bar)
         summary_row.addLayout(bars_box, 1)
 
-        self.summary_toggle_button = QPushButton("総計表示へ切替", bottom)
+        self.summary_toggle_button = QPushButton(tr(self.language, "btn_summary_all"), bottom)
         self.summary_toggle_button.clicked.connect(self._toggle_summary_mode)
         summary_row.addWidget(self.summary_toggle_button)
         bottom_layout.addLayout(summary_row)
 
         button_row = QHBoxLayout()
-        self.refresh_button = QPushButton("更新", bottom)
-        self.info_button = QPushButton("情報", bottom)
-        self.export_button = QPushButton("木生成", bottom)
-        self.open_button = LongPressButton("木閲覧", bottom)
-        self.settings_button = QPushButton("設定", bottom)
+        self.refresh_button = QPushButton(tr(self.language, "action_refresh"), bottom)
+        self.info_button = QPushButton(tr(self.language, "action_disk_info"), bottom)
+        self.export_button = QPushButton(tr(self.language, "action_export"), bottom)
+        self.open_button = LongPressButton(tr(self.language, "action_open"), bottom)
+        self.settings_button = QPushButton(tr(self.language, "action_settings"), bottom)
 
         self.refresh_button.clicked.connect(self.refresh_disks)
         self.info_button.clicked.connect(self._open_info_dialog)
@@ -237,7 +323,113 @@ class MainWindow(QMainWindow):
         splitter.setSizes([560, 200])
 
         self._create_loading_overlay(central)
-        self.statusBar().showMessage("準備完了")
+        self.statusBar().showMessage(tr(self.language, "status_ready"))
+
+    def _build_menu(self) -> None:
+        self.file_menu = self.menuBar().addMenu(tr(self.language, "menu_file"))
+        self.refresh_action = QAction(tr(self.language, "action_refresh"), self)
+        self.refresh_action.triggered.connect(self.refresh_disks)
+        self.settings_action = QAction(tr(self.language, "action_settings"), self)
+        self.settings_action.triggered.connect(self._open_settings)
+        self.exit_action = QAction(tr(self.language, "action_exit"), self)
+        self.exit_action.triggered.connect(self.close)
+        self.file_menu.addAction(self.refresh_action)
+        self.file_menu.addAction(self.settings_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.exit_action)
+
+        self.tree_menu = self.menuBar().addMenu(tr(self.language, "menu_mindmap"))
+        self.export_action = QAction(tr(self.language, "action_export"), self)
+        self.export_action.triggered.connect(self._export_mindmap)
+        self.open_action = QAction(tr(self.language, "action_open"), self)
+        self.open_action.triggered.connect(self._open_last_mindmap)
+        self.tree_menu.addAction(self.export_action)
+        self.tree_menu.addAction(self.open_action)
+
+        self.info_menu = self.menuBar().addMenu(tr(self.language, "menu_info"))
+        self.disk_info_action = QAction(tr(self.language, "action_disk_info"), self)
+        self.disk_info_action.triggered.connect(self._open_info_dialog)
+        self.info_menu.addAction(self.disk_info_action)
+
+        self.about_action = QAction(tr(self.language, "action_about"), self)
+        self.about_action.triggered.connect(self._open_about_dialog)
+        self.other_menu = QMenu(tr(self.language, "menu_other"), self)
+        self.other_menu.addAction(self.about_action)
+
+        corner = QWidget(self)
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(0, 0, 6, 0)
+        corner_layout.setSpacing(6)
+
+        self.theme_button = QToolButton(corner)
+        self.theme_button.clicked.connect(self._toggle_theme)
+        corner_layout.addWidget(self.theme_button)
+
+        self.language_combo = QComboBox(corner)
+        for code, label in LANGUAGES:
+            self.language_combo.addItem(label, code)
+        lang_index = self.language_combo.findData(self.language)
+        self.language_combo.setCurrentIndex(max(0, lang_index))
+        self.language_combo.currentIndexChanged.connect(self._on_language_combo_changed)
+        corner_layout.addWidget(self.language_combo)
+
+        self.other_button = QToolButton(corner)
+        self.other_button.setPopupMode(QToolButton.InstantPopup)
+        self.other_button.setMenu(self.other_menu)
+        corner_layout.addWidget(self.other_button)
+        self.menuBar().setCornerWidget(corner, Qt.TopRightCorner)
+        self._update_language_ui()
+
+    def _open_about_dialog(self) -> None:
+        AboutDialog(self.language, self).exec()
+
+    def _toggle_theme(self) -> None:
+        new_theme = "light" if str(self.config.get("basic.theme", "dark")) == "dark" else "dark"
+        self.config.set("basic.theme", new_theme)
+        self.config.save()
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, new_theme)
+        self._update_theme_button()
+
+    def _on_language_combo_changed(self, index: int) -> None:
+        code = str(self.language_combo.itemData(index) or "ja")
+        if code == self.language:
+            return
+        self.language = code
+        self.config.set("basic.language", code)
+        self.config.save()
+        self._update_language_ui()
+        QMessageBox.information(self, tr(self.language, "language_changed_title"), tr(self.language, "language_changed_text"))
+
+    def _update_theme_button(self) -> None:
+        theme = str(self.config.get("basic.theme", "dark"))
+        if hasattr(self, "theme_button"):
+            self.theme_button.setText(tr(self.language, "theme_dark") if theme == "dark" else tr(self.language, "theme_light"))
+
+    def _update_language_ui(self) -> None:
+        self.setWindowTitle(f"{tr(self.language, 'app_title')} v{__version__}")
+        if hasattr(self, "file_menu"):
+            self.file_menu.setTitle(tr(self.language, "menu_file"))
+            self.tree_menu.setTitle(tr(self.language, "menu_mindmap"))
+            self.info_menu.setTitle(tr(self.language, "menu_info"))
+            self.other_menu.setTitle(tr(self.language, "menu_other"))
+            self.refresh_action.setText(tr(self.language, "action_refresh"))
+            self.settings_action.setText(tr(self.language, "action_settings"))
+            self.exit_action.setText(tr(self.language, "action_exit"))
+            self.export_action.setText(tr(self.language, "action_export"))
+            self.open_action.setText(tr(self.language, "action_open"))
+            self.disk_info_action.setText(tr(self.language, "action_disk_info"))
+            self.about_action.setText(tr(self.language, "action_about"))
+            self.other_button.setText(tr(self.language, "menu_other"))
+        if hasattr(self, "refresh_button"):
+            self.refresh_button.setText(tr(self.language, "action_refresh"))
+            self.info_button.setText(tr(self.language, "action_disk_info"))
+            self.export_button.setText(tr(self.language, "action_export"))
+            self.open_button.setText(tr(self.language, "action_open"))
+            self.settings_button.setText(tr(self.language, "action_settings"))
+            self._update_summary_bars()
+        self._update_theme_button()
 
     def _create_loading_overlay(self, parent: QWidget) -> None:
         self.loading_overlay = QWidget(parent)
@@ -314,9 +506,9 @@ class MainWindow(QMainWindow):
     def refresh_disks(self) -> None:
         if self._refreshing:
             return
-        self.statusBar().showMessage("ディスク情報を更新中...")
+        self.statusBar().showMessage(tr(self.language, "status_refreshing"))
         self._refreshing = True
-        self._set_loading_visible(True, "ディスク情報を読み込み中...")
+        self._set_loading_visible(True, tr(self.language, "loading_disks"))
         QApplication.setOverrideCursor(Qt.WaitCursor)
 
         self._refresh_thread = QThread(self)
@@ -428,6 +620,7 @@ class MainWindow(QMainWindow):
             parent.setText(self.COL_DRIVE, device.title)
             parent.setText(self.COL_KIND, device.display_kind)
             parent.setText(self.COL_ATTR, ", ".join(device.attributes))
+            parent.setData(self.COL_SELECT, Qt.UserRole, f"device:{device.index}")
             # 設備本体は選択対象ではありません。選択できるのはファイルシステムを持つパーティションだけです。
             parent.setFlags(parent.flags() & ~Qt.ItemIsUserCheckable & ~Qt.ItemIsEditable)
             self.tree.setItemWidget(parent, self.COL_USAGE, DiskUsageBar(device.total_used, device.total_free, device.total_capacity, decimals, percent_decimals, self.tree))
@@ -476,19 +669,19 @@ class MainWindow(QMainWindow):
         decimals, percent_decimals = self._decimals()
         single = bool(self.config.get("ui.summary_single_mode", False))
         if single:
-            self.internal_label.setText("すべてのディスク総計")
+            self.internal_label.setText(tr(self.language, "label_all_total"))
             self.internal_bar.set_values(self.snapshot.all_used, self.snapshot.all_free, self.snapshot.all_total, decimals, percent_decimals)
             self.external_label.hide()
             self.external_bar.hide()
-            self.summary_toggle_button.setText("内部/外部表示へ切替")
+            self.summary_toggle_button.setText(tr(self.language, "btn_summary_split"))
         else:
-            self.internal_label.setText("内部ディスク総計" if self.snapshot.internal_total else "内部ディスクなし")
+            self.internal_label.setText(tr(self.language, "label_internal_total") if self.snapshot.internal_total else tr(self.language, "label_no_internal"))
             self.internal_bar.set_values(self.snapshot.internal_used, self.snapshot.internal_free, self.snapshot.internal_total, decimals, percent_decimals)
-            self.external_label.setText("外部ディスク総計" if self.snapshot.external_total else "外部ディスクなし")
+            self.external_label.setText(tr(self.language, "label_external_total") if self.snapshot.external_total else tr(self.language, "label_no_external"))
             self.external_bar.set_values(self.snapshot.external_used, self.snapshot.external_free, self.snapshot.external_total, decimals, percent_decimals)
             self.external_label.show()
             self.external_bar.show()
-            self.summary_toggle_button.setText("総計表示へ切替")
+            self.summary_toggle_button.setText(tr(self.language, "btn_summary_all"))
 
     def _toggle_summary_mode(self) -> None:
         value = not bool(self.config.get("ui.summary_single_mode", False))
@@ -523,7 +716,10 @@ class MainWindow(QMainWindow):
 
     def _show_tree_context_menu(self, pos) -> None:
         item = self.tree.itemAt(pos)
-        if not item or item.parent() is None:
+        if not item:
+            return
+        if item.parent() is None:
+            self._show_device_context_menu(item, pos)
             return
         key = item.data(self.COL_SELECT, Qt.UserRole)
         if not key:
@@ -568,6 +764,45 @@ class MainWindow(QMainWindow):
         menu.addAction(purpose_action)
         menu.addAction(memo_action)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+
+    def _show_device_context_menu(self, item: QTreeWidgetItem, pos) -> None:
+        data = str(item.data(self.COL_SELECT, Qt.UserRole) or "")
+        if not data.startswith("device:"):
+            return
+        try:
+            device_index = int(data.split(":", 1)[1])
+        except Exception:
+            return
+        device = self.device_by_index.get(device_index)
+        if device is None:
+            return
+        menu = QMenu(self)
+        internal_action = QAction("このディスクを内部ドライブとして扱う", self)
+        external_action = QAction("このディスクを外部ドライブとして扱う", self)
+        clear_action = QAction("自動判定に戻す", self)
+        internal_action.triggered.connect(lambda: self._set_device_internal(device, True))
+        external_action.triggered.connect(lambda: self._set_device_internal(device, False))
+        clear_action.triggered.connect(lambda: self._clear_device_internal_override(device))
+        menu.addAction(internal_action)
+        menu.addAction(external_action)
+        menu.addSeparator()
+        menu.addAction(clear_action)
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _set_device_internal(self, device: DeviceInfo, is_internal: bool) -> None:
+        self.config.set_device_internal_override(device.device_key, is_internal)
+        self.config.save()
+        device.is_internal = is_internal
+        device.kind = ("内部" if is_internal else "外部") + " " + (device.media_type or "不明")
+        self.snapshot = DiskSnapshot.from_devices(self.snapshot.devices, self.snapshot.errors)
+        self._populate_tree()
+        self._update_summary_bars()
+
+    def _clear_device_internal_override(self, device: DeviceInfo) -> None:
+        self.config.clear_device_override(device.device_key)
+        self.config.save()
+        self.refresh_disks()
 
     def _set_item_group(self, item: QTreeWidgetItem, key: str, group: str) -> None:
         item.setText(self.COL_GROUP, group)
@@ -641,9 +876,9 @@ class MainWindow(QMainWindow):
             if os.name == "nt":
                 os.startfile(path)  # type: ignore[attr-defined]
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
+                popen_hidden(["open", path])
             else:
-                subprocess.Popen(["xdg-open", path])
+                popen_hidden(["xdg-open", path])
         except Exception as exc:
             QMessageBox.warning(self, "起動失敗", f"パーティションを開けませんでした。\n{exc}")
 
@@ -693,7 +928,7 @@ class MainWindow(QMainWindow):
         if not exe:
             return
         try:
-            subprocess.Popen([exe, km_path], close_fds=True)
+            popen_hidden([exe, km_path])
         except Exception as exc:
             try:
                 if os.name == "nt":
@@ -704,8 +939,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "起動失敗", f"DesktopNaotuで開けませんでした。\n{exc}")
 
     def _open_settings(self) -> None:
-        dialog = SettingsDialog(self.config, self)
+        dialog = SettingsDialog(self.config, self.snapshot, self)
         if dialog.exec():
+            self.language = str(self.config.get("basic.language", self.language))
+            app = QApplication.instance()
+            if app is not None:
+                apply_theme(app, str(self.config.get("basic.theme", "dark")))
+            self._update_language_ui()
             self._reset_refresh_timer()
             self.autosave_timer.start(int(self.config.get("basic.autosave_minutes", 5)) * 60 * 1000)
             self._update_summary_bars()

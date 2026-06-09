@@ -54,6 +54,14 @@ class DeviceInfo:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
+    def device_key(self) -> str:
+        if self.uuid:
+            return f"uuid:{self.uuid}"
+        if self.system_index is not None:
+            return f"disk:{self.system_index}"
+        return f"index:{self.index}:{self.name}"
+
+    @property
     def title(self) -> str:
         side = "内部ドライブ" if self.is_internal else "外部ドライブ"
         media = self.media_type or "不明"

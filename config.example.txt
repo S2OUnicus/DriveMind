@@ -5,10 +5,17 @@
     "config_file_path": "",
     "capacity_decimals": 2,
     "percent_decimals": 2,
+    "language": "ja",
+    "theme": "dark",
     "treat_system_disk_as_internal": true,
     "show_esp_partitions": false,
     "show_msr_partitions": false,
     "show_oem_partitions": false,
+    "show_readonly_partitions": true,
+    "show_hidden_partitions": false,
+    "show_ram_disks": false,
+    "show_web_disks": false,
+    "show_remote_disks": false,
     "run_as_admin": false
   },
   "desktop_naotu": {
@@ -50,5 +57,7 @@
     "summary_single_mode": false,
     "sort_column": 2,
     "sort_desc": false
-  }
+  },
+  "drive_notes": {},
+  "device_overrides": {}
 }

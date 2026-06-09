@@ -28,6 +28,17 @@ def _ensure_list(value: Any) -> list[Any]:
     return [value]
 
 
+def _windows_subprocess_kwargs() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def _powershell_json(script: str, timeout: int = 10) -> dict[str, Any]:
     if os.name != "nt":
         return {}
@@ -39,7 +50,7 @@ def _powershell_json(script: str, timeout: int = 10) -> dict[str, Any]:
         "-Command",
         script,
     ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, **_windows_subprocess_kwargs())
     if result.returncode != 0 or not result.stdout.strip():
         return {}
     try:
@@ -85,6 +96,7 @@ def _windows_disk_inventory() -> tuple[
     dict[int, int],
     dict[int, dict[str, Any]],
     dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
     set[int],
 ]:
     """Windowsの物理ディスクと論理ドライブの対応を取得します。
@@ -96,7 +108,7 @@ def _windows_disk_inventory() -> tuple[
 $ErrorActionPreference = 'SilentlyContinue'
 $disks = Get-Disk | Select-Object Number,FriendlyName,SerialNumber,BusType,MediaType,Size,UniqueId,IsBoot,IsSystem,IsReadOnly,IsOffline,PartitionStyle
 $win32 = Get-CimInstance Win32_DiskDrive | Select-Object Index,Model,SerialNumber,InterfaceType,MediaType,Size,PNPDeviceID
-$parts = Get-Partition | Select-Object DiskNumber,PartitionNumber,DriveLetter,Type,GptType,MbrType,IsBoot,IsSystem,IsReadOnly,IsOffline,Size
+$parts = Get-Partition | Select-Object DiskNumber,PartitionNumber,DriveLetter,Type,GptType,MbrType,IsBoot,IsSystem,IsReadOnly,IsHidden,IsOffline,Size
 $volumes = @()
 foreach ($p in (Get-Partition)) {
   if ($p.DriveLetter) {
@@ -114,6 +126,7 @@ foreach ($p in (Get-Partition)) {
       IsBoot = $p.IsBoot
       IsSystem = $p.IsSystem
       IsReadOnly = $p.IsReadOnly
+      IsHidden = $p.IsHidden
       IsOffline = $p.IsOffline
       Size = $p.Size
     }
@@ -121,7 +134,8 @@ foreach ($p in (Get-Partition)) {
 }
 $links = Get-CimInstance Win32_LogicalDiskToPartition | Select-Object Antecedent,Dependent
 $physical = Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,SerialNumber,MediaType,BusType,Size
-[PSCustomObject]@{Disks=$disks;Win32=$win32;Partitions=$parts;Volumes=$volumes;Links=$links;Physical=$physical} | ConvertTo-Json -Depth 8 -Compress
+$logical = Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,ProviderName,VolumeName,FileSystem
+[PSCustomObject]@{Disks=$disks;Win32=$win32;Partitions=$parts;Volumes=$volumes;Links=$links;Physical=$physical;Logical=$logical} | ConvertTo-Json -Depth 8 -Compress
 '''
     data = _powershell_json(script)
     disks_by_index: dict[int, dict[str, Any]] = {}
@@ -129,6 +143,7 @@ $physical = Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,SerialNumber,
     partition_counts: dict[int, int] = {}
     physical_by_index: dict[int, dict[str, Any]] = {}
     volume_meta: dict[str, dict[str, Any]] = {}
+    logical_meta: dict[str, dict[str, Any]] = {}
     system_disks: set[int] = set()
 
     # Get-Disk を優先します。Number は Get-Partition の DiskNumber と対応します。
@@ -194,12 +209,17 @@ $physical = Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,SerialNumber,
             continue
         physical_by_index[idx] = dict(physical)
 
+    for logical in _ensure_list(data.get("Logical")):
+        drive = str(logical.get("DeviceID", "")).upper().strip()
+        if drive:
+            logical_meta[drive] = dict(logical)
+
     # OSのSystemDriveが分かる場合は、そのドライブを含むディスクをシステムディスクとして扱います。
     system_drive = os.environ.get("SystemDrive", "").upper().strip()
     if system_drive in drive_to_disk:
         system_disks.add(drive_to_disk[system_drive])
 
-    return disks_by_index, drive_to_disk, partition_counts, physical_by_index, volume_meta, system_disks
+    return disks_by_index, drive_to_disk, partition_counts, physical_by_index, volume_meta, logical_meta, system_disks
 
 
 def _normalize_media_type(*values: str) -> str:
@@ -214,9 +234,11 @@ def _normalize_media_type(*values: str) -> str:
 
 
 def _is_external(interface: str, bus_type: str, pnp: str) -> bool:
-    text = f"{interface} {bus_type} {pnp}".lower()
-    external_tokens = ["usb", "sd", "1394", "firewire", "thunderbolt"]
-    return any(token in text for token in external_tokens)
+    text = f" {interface} {bus_type} {pnp} ".lower()
+    compact = text.replace("-", " ").replace("_", " ")
+    if any(token in compact for token in [" usb", " 1394", "firewire", "thunderbolt"]):
+        return True
+    return bus_type.strip().lower() in {"usb", "sd", "mmc", "1394"}
 
 
 def _interface_label(interface: str, bus_type: str) -> str:
@@ -248,13 +270,38 @@ def _partition_kind(meta: dict[str, Any]) -> str:
     return str(meta.get("Type") or meta.get("GptType") or meta.get("MbrType") or "").strip()
 
 
-def _should_show_partition(config: ConfigManager, partition_kind: str) -> bool:
+def _is_ram_disk_label(label: str) -> bool:
+    text = label.lower().replace(" ", "")
+    return any(token in text for token in ["ramcache", "ramdisk", "ramdrive"])
+
+
+def _is_web_disk_label(label: str, provider: str = "") -> bool:
+    text = f"{label} {provider}".lower()
+    tokens = ["google drive", "googledrive", "onedrive", "dropbox", "webdav", "webdrv", "web disk", "webdisk", "icloud drive"]
+    return any(token in text for token in tokens)
+
+
+def _should_show_partition(config: ConfigManager, partition_kind: str, attributes: list[str], label: str, logical: dict[str, Any]) -> bool:
     kind = (partition_kind or "").upper()
     if kind == "ESP" and not bool(config.get("basic.show_esp_partitions", False)):
         return False
     if kind == "MSR" and not bool(config.get("basic.show_msr_partitions", False)):
         return False
     if kind == "OEM" and not bool(config.get("basic.show_oem_partitions", False)):
+        return False
+    upper_attrs = {a.upper() for a in attributes}
+    if "RO" in upper_attrs and not bool(config.get("basic.show_readonly_partitions", True)):
+        return False
+    if "H" in upper_attrs and not bool(config.get("basic.show_hidden_partitions", False)):
+        return False
+    provider = str(logical.get("ProviderName") or "")
+    drive_type = str(logical.get("DriveType") or "")
+    if _is_ram_disk_label(label) and not bool(config.get("basic.show_ram_disks", False)):
+        return False
+    if _is_web_disk_label(label, provider) and not bool(config.get("basic.show_web_disks", False)):
+        return False
+    # Win32_LogicalDisk DriveType=4 はネットワークドライブです。
+    if drive_type == "4" and not bool(config.get("basic.show_remote_disks", False)):
         return False
     return True
 
@@ -282,6 +329,7 @@ class DriveScanner:
             partition_counts,
             physical_by_index,
             volume_meta,
+            logical_meta,
             system_disks,
         ) = _windows_disk_inventory()
         device_map: dict[int, DeviceInfo] = {}
@@ -328,6 +376,10 @@ class DriveScanner:
                 attributes=attrs,
                 raw={"disk": raw, "physical": physical},
             )
+            override = self.config.settings.get("device_overrides", {}).get(device.device_key, {})
+            if "is_internal" in override:
+                device.is_internal = bool(override.get("is_internal"))
+                device.kind = ("内部" if device.is_internal else "外部") + " " + media_type
             device_map[display_index] = device
             system_to_display[system_index] = display_index
 
@@ -363,23 +415,33 @@ class DriveScanner:
             device = device_map[display_index]
             label, fs_name, volume_attrs = _volume_label_and_fs(mount)
             meta = volume_meta.get(drive, {})
+            logical = logical_meta.get(drive, {})
+            label = label or str(meta.get("Label") or logical.get("VolumeName") or "")
+            fstype = partition.fstype or fs_name or str(meta.get("FileSystem") or logical.get("FileSystem") or "")
             partition_kind = _partition_kind(meta)
-            if not _should_show_partition(self.config, partition_kind):
-                continue
-            order_all += 1
-            per_device_count[display_index] = per_device_count.get(display_index, 0) + 1
-            label = label or str(meta.get("Label") or "")
-            fstype = partition.fstype or fs_name or str(meta.get("FileSystem") or "")
             attributes = list(dict.fromkeys(volume_attrs))
             opts = (partition.opts or "").lower()
             if "ro" in opts or _bool_meta(meta, "IsReadOnly"):
                 attributes.append("RO")
+            if _bool_meta(meta, "IsHidden"):
+                attributes.append("H")
             if _bool_meta(meta, "IsOffline"):
                 attributes.append("Offline")
             if partition_kind in {"ESP", "MSR", "OEM"}:
                 attributes.append(partition_kind)
             if str(meta.get("Type") or "").lower() == "reserved":
                 attributes.append("Reserved")
+            if str(logical.get("DriveType") or "") == "4":
+                attributes.append("Remote")
+            if _is_ram_disk_label(label):
+                attributes.append("RAM")
+            if _is_web_disk_label(label, str(logical.get("ProviderName") or "")):
+                attributes.append("Web")
+            attributes = list(dict.fromkeys(attributes))
+            if not _should_show_partition(self.config, partition_kind, attributes, label, logical):
+                continue
+            order_all += 1
+            per_device_count[display_index] = per_device_count.get(display_index, 0) + 1
 
             key = drive or mount
             note = self.config.drive_note(key)
