@@ -72,9 +72,20 @@ class MindmapExporter:
     def __init__(self, config: ConfigManager) -> None:
         self.config = config
         self.errors: list[str] = []
+        self.max_depth = int(self.config.get("mindmap.max_depth", 48) or 48)
+        self.max_files_per_folder = int(self.config.get("mindmap.max_files_per_folder", 16) or 16)
 
-    def export(self, devices: list[DeviceInfo], selected_keys: set[str], output_path: str | Path) -> Path:
+    def export(
+        self,
+        devices: list[DeviceInfo],
+        selected_keys: set[str],
+        output_path: str | Path,
+        max_depth: int | None = None,
+        max_files_per_folder: int | None = None,
+    ) -> Path:
         self.errors.clear()
+        self.max_depth = max(1, int(max_depth if max_depth is not None else self.config.get("mindmap.max_depth", 48)))
+        self.max_files_per_folder = max(0, int(max_files_per_folder if max_files_per_folder is not None else self.config.get("mindmap.max_files_per_folder", 16)))
         output = Path(output_path)
         root = make_node("DriveMind")
         for device in devices:
@@ -105,8 +116,7 @@ class MindmapExporter:
         return output
 
     def _walk(self, folder: Path, depth: int) -> list[dict]:
-        max_depth = int(self.config.get("mindmap.max_depth", 6) or 6)
-        if depth >= max_depth:
+        if depth >= self.max_depth:
             return []
 
         exclude_names = set(str(x).lower() for x in self.config.get("mindmap.exclude_names", []))
@@ -129,6 +139,8 @@ class MindmapExporter:
             self.errors.append(f"読み取り不可: {folder} ({exc})")
             return [make_node("[読み取り不可]")]
 
+        file_count = 0
+        skipped_files = 0
         for entry in entries:
             if entry.name.lower() in exclude_names:
                 continue
@@ -145,8 +157,14 @@ class MindmapExporter:
                     node["children"] = self._walk(entry, depth + 1)
                     nodes.append(node)
                 elif include_files and entry.is_file():
+                    if self.max_files_per_folder and file_count >= self.max_files_per_folder:
+                        skipped_files += 1
+                        continue
+                    file_count += 1
                     nodes.append(make_node(display_name(entry, include_extensions, mark_hidden, flags)))
             except OSError as exc:
                 self.errors.append(f"読み取り不可: {entry} ({exc})")
                 continue
+        if skipped_files:
+            nodes.append(make_node(f"[同一フォルダ内のファイル数制限により省略: {skipped_files} 件]"))
         return nodes

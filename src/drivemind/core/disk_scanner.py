@@ -235,6 +235,30 @@ def _bool_meta(meta: dict[str, Any], key: str) -> bool:
     return str(meta.get(key, "")).lower() == "true" or meta.get(key) is True
 
 
+def _partition_kind(meta: dict[str, Any]) -> str:
+    text = f"{meta.get('Type', '')} {meta.get('GptType', '')} {meta.get('MbrType', '')}".lower()
+    if "system" in text or "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" in text:
+        return "ESP"
+    if "reserved" in text or "e3c9e316-0b5c-4db8-817d-f92df00215ae" in text:
+        return "MSR"
+    if "oem" in text or "de94bba4-06d1-4d40-a16a-bfd50179d6ac" in text:
+        return "OEM"
+    if "basic" in text:
+        return "Basic"
+    return str(meta.get("Type") or meta.get("GptType") or meta.get("MbrType") or "").strip()
+
+
+def _should_show_partition(config: ConfigManager, partition_kind: str) -> bool:
+    kind = (partition_kind or "").upper()
+    if kind == "ESP" and not bool(config.get("basic.show_esp_partitions", False)):
+        return False
+    if kind == "MSR" and not bool(config.get("basic.show_msr_partitions", False)):
+        return False
+    if kind == "OEM" and not bool(config.get("basic.show_oem_partitions", False)):
+        return False
+    return True
+
+
 class DriveScanner:
     def __init__(self, config: ConfigManager) -> None:
         self.config = config
@@ -337,10 +361,13 @@ class DriveScanner:
                 display_index = unknown_display_index
 
             device = device_map[display_index]
-            order_all += 1
-            per_device_count[display_index] = per_device_count.get(display_index, 0) + 1
             label, fs_name, volume_attrs = _volume_label_and_fs(mount)
             meta = volume_meta.get(drive, {})
+            partition_kind = _partition_kind(meta)
+            if not _should_show_partition(self.config, partition_kind):
+                continue
+            order_all += 1
+            per_device_count[display_index] = per_device_count.get(display_index, 0) + 1
             label = label or str(meta.get("Label") or "")
             fstype = partition.fstype or fs_name or str(meta.get("FileSystem") or "")
             attributes = list(dict.fromkeys(volume_attrs))
@@ -349,6 +376,8 @@ class DriveScanner:
                 attributes.append("RO")
             if _bool_meta(meta, "IsOffline"):
                 attributes.append("Offline")
+            if partition_kind in {"ESP", "MSR", "OEM"}:
+                attributes.append(partition_kind)
             if str(meta.get("Type") or "").lower() == "reserved":
                 attributes.append("Reserved")
 
@@ -371,6 +400,7 @@ class DriveScanner:
                 group=str(note.get("group", "")),
                 purpose=str(note.get("purpose", "")),
                 memo=str(note.get("memo", "")),
+                partition_type=partition_kind,
                 selected=bool(note.get("selected", False)),
             )
             device.volumes.append(volume)

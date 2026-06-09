@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
+import sys
 import webbrowser
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from PySide6.QtGui import QAction, QBrush, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -21,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QFrame,
+    QSpinBox,
     QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
@@ -35,6 +40,7 @@ from drivemind.core.models import DeviceInfo, DiskSnapshot, VolumeInfo
 from drivemind.core.update_checker import UpdateResult, check_latest_release, should_check_update, today_iso
 from drivemind.version import APP_TITLE, GITHUB_RELEASES_URL, __version__
 from drivemind.ui.info_dialog import InfoDialog
+from drivemind.ui.partition_info_dialog import PartitionInfoDialog
 from drivemind.ui.progress_bar import DiskUsageBar
 from drivemind.ui.settings_dialog import SettingsDialog
 from drivemind.ui.widgets import LongPressButton
@@ -60,6 +66,43 @@ class RefreshWorker(QObject):
         self.finished.emit(scanner.scan())
 
 
+class MindmapExportOptionsDialog(QDialog):
+    def __init__(self, config: ConfigManager, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("マインドマップ出力設定")
+        root = QVBoxLayout(self)
+        form = QFormLayout()
+        self.max_depth_spin = QSpinBox(self)
+        self.max_depth_spin.setRange(1, 128)
+        self.max_depth_spin.setValue(int(config.get("mindmap.max_depth", 48)))
+        form.addRow("フォルダ最大階層", self.max_depth_spin)
+
+        self.max_files_spin = QSpinBox(self)
+        self.max_files_spin.setRange(0, 10000)
+        self.max_files_spin.setSpecialValueText("制限しない")
+        self.max_files_spin.setValue(int(config.get("mindmap.max_files_per_folder", 16)))
+        form.addRow("同一フォルダ内の最大ファイル数", self.max_files_spin)
+
+        note = QLabel("この設定は今回の出力だけに使います。初期値は 設定 > マインドマップ で変更できます。", self)
+        note.setWordWrap(True)
+        root.addWidget(note)
+        root.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.button(QDialogButtonBox.Ok).setText("続行")
+        buttons.button(QDialogButtonBox.Cancel).setText("キャンセル")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    @property
+    def max_depth(self) -> int:
+        return self.max_depth_spin.value()
+
+    @property
+    def max_files_per_folder(self) -> int:
+        return self.max_files_spin.value()
+
+
 class MainWindow(QMainWindow):
     COL_SELECT = 0
     COL_ORDER = 1
@@ -67,20 +110,18 @@ class MainWindow(QMainWindow):
     COL_GROUP = 3
     COL_PURPOSE = 4
     COL_KIND = 5
-    COL_LABEL = 6
-    COL_MEMO = 7
-    COL_FS = 8
-    COL_USAGE = 9
-    COL_ATTR = 10
+    COL_MEMO = 6
+    COL_FS = 7
+    COL_USAGE = 8
+    COL_ATTR = 9
 
     HEADERS = [
         "選択",
         "順番",
-        "ドライブ",
+        "ドライブ（ラベル）",
         "グループ",
         "用途",
         "種類",
-        "ラベル",
         "メモ",
         "ファイルシステム",
         "使用状況",
@@ -103,6 +144,8 @@ class MainWindow(QMainWindow):
         self._update_thread: QThread | None = None
         self._update_worker: UpdateWorker | None = None
         self._sort_column = int(self.config.get("ui.sort_column", self.COL_DRIVE))
+        if self._sort_column not in self.SORTABLE_COLUMNS:
+            self._sort_column = self.COL_DRIVE
         self._sort_desc = bool(self.config.get("ui.sort_desc", False))
 
         self.setWindowTitle(f"{APP_TITLE} v{__version__}")
@@ -249,11 +292,10 @@ class MainWindow(QMainWindow):
         defaults = {
             self.COL_SELECT: 44,
             self.COL_ORDER: 96,
-            self.COL_DRIVE: max(120, width // 10),
+            self.COL_DRIVE: max(210, width // 6),
             self.COL_GROUP: 82,
             self.COL_PURPOSE: 88,
             self.COL_KIND: 110,
-            self.COL_LABEL: 140,
             self.COL_MEMO: 104,
             self.COL_FS: 110,
             self.COL_USAGE: max(260, width // 4),
@@ -408,11 +450,11 @@ class MainWindow(QMainWindow):
 
     def _fill_volume_item(self, item: QTreeWidgetItem, volume: VolumeInfo, device: DeviceInfo) -> None:
         item.setText(self.COL_ORDER, f"{volume.order_all} - {device.index}:{volume.order_device}")
-        item.setText(self.COL_DRIVE, volume.drive)
+        label = volume.label.strip()
+        item.setText(self.COL_DRIVE, f"{volume.drive} （{label}）" if label else volume.drive)
         item.setText(self.COL_GROUP, volume.group)
         item.setText(self.COL_PURPOSE, volume.purpose)
         item.setText(self.COL_KIND, device.display_kind)
-        item.setText(self.COL_LABEL, volume.label)
         item.setText(self.COL_MEMO, volume.memo)
         item.setText(self.COL_FS, volume.file_system)
         item.setText(self.COL_ATTR, ", ".join(volume.attributes))
@@ -483,26 +525,48 @@ class MainWindow(QMainWindow):
         item = self.tree.itemAt(pos)
         if not item or item.parent() is None:
             return
-        column = self.tree.currentColumn()
-        if column != self.COL_GROUP:
-            return
         key = item.data(self.COL_SELECT, Qt.UserRole)
         if not key:
             return
+        key = str(key)
+        volume = self.volume_by_key.get(key)
+        if volume is None:
+            return
+
         menu = QMenu(self)
+        open_action = QAction("パーティションを開く", self)
+        open_action.triggered.connect(lambda: self._open_partition(volume))
+        export_action = QAction("このパーティションの木を生成する", self)
+        export_action.triggered.connect(lambda: self._export_mindmap({key}))
+        info_action = QAction("パーティション情報", self)
+        info_action.triggered.connect(lambda: self._open_partition_info(volume))
+        purpose_action = QAction("用途編集", self)
+        purpose_action.triggered.connect(lambda: self._ask_item_text(item, key, self.COL_PURPOSE, "purpose", "用途"))
+        memo_action = QAction("メモ編集", self)
+        memo_action.triggered.connect(lambda: self._ask_item_text(item, key, self.COL_MEMO, "memo", "メモ"))
+
+        menu.addAction(open_action)
+        menu.addAction(export_action)
+        menu.addAction(info_action)
+        menu.addSeparator()
+
+        group_menu = menu.addMenu("グループ変更")
         groups = self.config.known_groups()
         if groups:
             for group in groups:
                 action = QAction(group, self)
-                action.triggered.connect(lambda checked=False, g=group: self._set_item_group(item, str(key), g))
-                menu.addAction(action)
-            menu.addSeparator()
+                action.triggered.connect(lambda checked=False, g=group: self._set_item_group(item, key, g))
+                group_menu.addAction(action)
+            group_menu.addSeparator()
         new_action = QAction("新しいグループを入力", self)
-        new_action.triggered.connect(lambda: self._ask_item_group(item, str(key)))
+        new_action.triggered.connect(lambda: self._ask_item_group(item, key))
         clear_action = QAction("グループを消す", self)
-        clear_action.triggered.connect(lambda: self._set_item_group(item, str(key), ""))
-        menu.addAction(new_action)
-        menu.addAction(clear_action)
+        clear_action.triggered.connect(lambda: self._set_item_group(item, key, ""))
+        group_menu.addAction(new_action)
+        group_menu.addAction(clear_action)
+
+        menu.addAction(purpose_action)
+        menu.addAction(memo_action)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _set_item_group(self, item: QTreeWidgetItem, key: str, group: str) -> None:
@@ -532,10 +596,13 @@ class MainWindow(QMainWindow):
         dialog = InfoDialog(self.snapshot, self.scanner, self.config, self)
         dialog.exec()
 
-    def _export_mindmap(self) -> None:
-        selected = self._selected_volume_keys()
+    def _export_mindmap(self, selected_override: set[str] | None = None) -> None:
+        selected = selected_override or self._selected_volume_keys()
         if not selected:
             QMessageBox.information(self, "選択なし", "出力するドライブにチェックを入れてください。")
+            return
+        options = MindmapExportOptionsDialog(self.config, self)
+        if options.exec() != QDialog.Accepted:
             return
         path, _ = QFileDialog.getSaveFileName(self, "マインドマップを保存", str(Path.home() / "DriveMind.km"), "DesktopNaotu Mindmap (*.km);;All files (*.*)")
         if not path:
@@ -543,18 +610,59 @@ class MainWindow(QMainWindow):
         if not path.lower().endswith(".km"):
             path += ".km"
         exporter = MindmapExporter(self.config)
+        self._set_loading_visible(True, "マインドマップを生成中...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
         try:
-            output = exporter.export(self.snapshot.devices, selected, path)
+            output = exporter.export(
+                self.snapshot.devices,
+                selected,
+                path,
+                max_depth=options.max_depth,
+                max_files_per_folder=options.max_files_per_folder,
+            )
         except Exception as exc:
             QApplication.restoreOverrideCursor()
+            self._set_loading_visible(False)
             QMessageBox.warning(self, "出力失敗", f"マインドマップを出力できませんでした。\n{exc}")
             return
         QApplication.restoreOverrideCursor()
+        self._set_loading_visible(False)
         message = f"マインドマップを出力しました。\n{output}"
         if exporter.errors:
             message += f"\n\n読み取りできなかった項目: {len(exporter.errors)} 件"
         QMessageBox.information(self, "出力完了", message)
+
+    def _open_partition(self, volume: VolumeInfo) -> None:
+        path = volume.mountpoint or volume.drive
+        if not path:
+            return
+        try:
+            if os.name == "nt":
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as exc:
+            QMessageBox.warning(self, "起動失敗", f"パーティションを開けませんでした。\n{exc}")
+
+    def _open_partition_info(self, volume: VolumeInfo) -> None:
+        device = self.device_by_index.get(volume.device_index)
+        if device is None:
+            QMessageBox.warning(self, "情報なし", "所属デバイス情報を取得できませんでした。")
+            return
+        dialog = PartitionInfoDialog(device, volume, self.config, self)
+        dialog.exec()
+
+    def _ask_item_text(self, item: QTreeWidgetItem, key: str, column: int, field: str, title: str) -> None:
+        text, ok = QInputDialog.getText(self, title, title, text=item.text(column))
+        if not ok:
+            return
+        value = text.strip()
+        item.setText(column, value)
+        self.config.set_drive_note_value(key, field, value)
+        self.config.save()
 
     def _ensure_naotu_path(self) -> str:
         path = str(self.config.get("desktop_naotu.exe_path", "")).strip()

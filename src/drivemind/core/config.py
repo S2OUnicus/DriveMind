@@ -27,6 +27,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "percent_decimals": 2,
         # システムパーティションを含む物理ディスクは内部ドライブとして扱います。
         "treat_system_disk_as_internal": True,
+        # ESP / MSR / OEM パーティションは初期値では表示しません。
+        "show_esp_partitions": False,
+        "show_msr_partitions": False,
+        "show_oem_partitions": False,
+        # 必要な場合だけ管理者権限で起動します。
+        "run_as_admin": False,
     },
     "desktop_naotu": {
         "exe_path": "",
@@ -45,7 +51,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "include_system": False,
         "include_files": False,
         "include_extensions": True,
-        "max_depth": 6,
+        "max_depth": 48,
+        "max_files_per_folder": 16,
     },
     "catalogs": {
         # グループ名 -> 背景色。色なしの場合は空文字です。

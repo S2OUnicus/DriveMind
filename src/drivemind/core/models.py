@@ -22,6 +22,7 @@ class VolumeInfo:
     group: str = ""
     purpose: str = ""
     memo: str = ""
+    partition_type: str = ""
     selected: bool = False
 
     @property

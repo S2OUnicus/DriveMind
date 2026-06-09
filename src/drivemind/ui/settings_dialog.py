@@ -350,6 +350,16 @@ class SettingsDialog(QDialog):
         self.system_disk_internal_cb = QCheckBox("システムパーティションが存在するディスクを内部ドライブとして扱う", tab)
         form.addRow("内部/外部判定", self.system_disk_internal_cb)
 
+        self.show_esp_cb = QCheckBox("ESP パーティションを表示する", tab)
+        self.show_msr_cb = QCheckBox("MSR パーティションを表示する", tab)
+        self.show_oem_cb = QCheckBox("OEM パーティションを表示する", tab)
+        form.addRow("特殊パーティション", self.show_esp_cb)
+        form.addRow("", self.show_msr_cb)
+        form.addRow("", self.show_oem_cb)
+
+        self.run_as_admin_cb = QCheckBox("次回から管理者として起動する", tab)
+        form.addRow("管理者権限", self.run_as_admin_cb)
+
         path_row = QHBoxLayout()
         self.config_path_edit = QLineEdit(tab)
         browse_config = QPushButton("参照", tab)
@@ -415,8 +425,13 @@ class SettingsDialog(QDialog):
         form.addRow("拡張子", self.include_extensions_cb)
 
         self.max_depth_spin = QSpinBox(tab)
-        self.max_depth_spin.setRange(1, 50)
-        form.addRow("最大階層", self.max_depth_spin)
+        self.max_depth_spin.setRange(1, 128)
+        form.addRow("初期最大フォルダ階層", self.max_depth_spin)
+
+        self.max_files_spin = QSpinBox(tab)
+        self.max_files_spin.setRange(0, 10000)
+        self.max_files_spin.setSpecialValueText("制限しない")
+        form.addRow("同一フォルダ内の初期最大ファイル数", self.max_files_spin)
 
         layout.addLayout(form)
         layout.addStretch(1)
@@ -435,7 +450,7 @@ class SettingsDialog(QDialog):
         form.addRow("更新確認", self.update_freq_combo)
 
         self.skip_version_edit = QLineEdit(tab)
-        self.skip_version_edit.setPlaceholderText("例: v1.1.0")
+        self.skip_version_edit.setPlaceholderText("例: v1.2.0")
         form.addRow("提示しないバージョン", self.skip_version_edit)
 
         self.last_check_label = QLabel("未確認", tab)
@@ -454,6 +469,10 @@ class SettingsDialog(QDialog):
         self.capacity_decimals_spin.setValue(int(self.config.get("basic.capacity_decimals", 2)))
         self.percent_decimals_spin.setValue(int(self.config.get("basic.percent_decimals", 2)))
         self.system_disk_internal_cb.setChecked(bool(self.config.get("basic.treat_system_disk_as_internal", True)))
+        self.show_esp_cb.setChecked(bool(self.config.get("basic.show_esp_partitions", False)))
+        self.show_msr_cb.setChecked(bool(self.config.get("basic.show_msr_partitions", False)))
+        self.show_oem_cb.setChecked(bool(self.config.get("basic.show_oem_partitions", False)))
+        self.run_as_admin_cb.setChecked(bool(self.config.get("basic.run_as_admin", False)))
         self.config_path_edit.setText(str(self.config.path))
         self.naotu_path_edit.setText(str(self.config.get("desktop_naotu.exe_path", "")))
         self.exclude_text.setPlainText("\n".join(self.config.get("mindmap.exclude_names", [])))
@@ -462,7 +481,8 @@ class SettingsDialog(QDialog):
         self.include_system_cb.setChecked(bool(self.config.get("mindmap.include_system", False)))
         self.include_files_cb.setChecked(bool(self.config.get("mindmap.include_files", False)))
         self.include_extensions_cb.setChecked(bool(self.config.get("mindmap.include_extensions", True)))
-        self.max_depth_spin.setValue(int(self.config.get("mindmap.max_depth", 6)))
+        self.max_depth_spin.setValue(int(self.config.get("mindmap.max_depth", 48)))
+        self.max_files_spin.setValue(int(self.config.get("mindmap.max_files_per_folder", 16)))
         freq = self.config.get("other.update_check_frequency", "daily")
         idx = self.update_freq_combo.findData(freq)
         self.update_freq_combo.setCurrentIndex(max(idx, 0))
@@ -512,6 +532,10 @@ class SettingsDialog(QDialog):
         self.config.set("basic.capacity_decimals", self.capacity_decimals_spin.value())
         self.config.set("basic.percent_decimals", self.percent_decimals_spin.value())
         self.config.set("basic.treat_system_disk_as_internal", self.system_disk_internal_cb.isChecked())
+        self.config.set("basic.show_esp_partitions", self.show_esp_cb.isChecked())
+        self.config.set("basic.show_msr_partitions", self.show_msr_cb.isChecked())
+        self.config.set("basic.show_oem_partitions", self.show_oem_cb.isChecked())
+        self.config.set("basic.run_as_admin", self.run_as_admin_cb.isChecked())
         self.config.set("desktop_naotu.exe_path", self.naotu_path_edit.text().strip())
         excludes = [line.strip() for line in self.exclude_text.toPlainText().splitlines() if line.strip()]
         self.config.set("mindmap.exclude_names", excludes)
@@ -521,6 +545,7 @@ class SettingsDialog(QDialog):
         self.config.set("mindmap.include_files", self.include_files_cb.isChecked())
         self.config.set("mindmap.include_extensions", self.include_extensions_cb.isChecked())
         self.config.set("mindmap.max_depth", self.max_depth_spin.value())
+        self.config.set("mindmap.max_files_per_folder", self.max_files_spin.value())
         self.config.set("other.update_check_frequency", self.update_freq_combo.currentData())
         self.config.set("other.skip_version", self.skip_version_edit.text().strip())
         self.config.save()
