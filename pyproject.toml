@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drivemind"
+version = "1.1.0"
+description = "Windows disk information viewer and DesktopNaotu mindmap exporter."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "@S2OUnicus"}]
+license = {text = "CC-BY-NC-ND-4.0"}
+dependencies = [
+  "PySide6>=6.6",
+  "psutil>=5.9"
+]
+
+[project.scripts]
+drivemind = "drivemind.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,49 @@
+{
+  "basic": {
+    "refresh_interval_seconds": 180,
+    "autosave_minutes": 5,
+    "config_file_path": "",
+    "capacity_decimals": 2,
+    "percent_decimals": 2,
+    "treat_system_disk_as_internal": true
+  },
+  "desktop_naotu": {
+    "exe_path": ""
+  },
+  "mindmap": {
+    "exclude_names": [
+      "System Volume Information",
+      "$RECYCLE.BIN",
+      "$MFT"
+    ],
+    "include_hidden": true,
+    "mark_hidden": true,
+    "include_system": false,
+    "include_files": false,
+    "include_extensions": true,
+    "max_depth": 6
+  },
+  "catalogs": {
+    "groups": {
+      "システム": "#bbdefb"
+    },
+    "purposes": [
+      "システム",
+      "作業用",
+      "バックアップ"
+    ],
+    "memos": []
+  },
+  "other": {
+    "update_check_frequency": "daily",
+    "last_update_check": "",
+    "suppress_update_date": "",
+    "skip_version": ""
+  },
+  "ui": {
+    "column_order_state": "",
+    "summary_single_mode": false,
+    "sort_column": 2,
+    "sort_desc": false
+  }
+}
