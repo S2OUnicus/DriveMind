@@ -2,6 +2,24 @@
 
 [日本語](CHANGELOG.md) / [English](CHANGELOG.EN.md) / [中文](CHANGELOG.ZH.md) / [한국어](CHANGELOG.KR.md)
 
+## v3.1.0
+
+### Added
+
+- Added a right-click menu to the file list
+  - Open file
+  - Open containing folder
+  - Delete file with two confirmations
+  - Show system file properties
+- Added `Image` and `Archive` categories to file analysis
+- Added BitLocker status icons and NTFS version display to the file system column
+
+### Changed
+
+- Renamed the `Music` category to `Audio`
+- Reduced unwanted helper console windows when running a PyInstaller `--noconsole` build
+- Updated the version number to `v3.1.0`
+
 ## v3.0.0
 
 ### Added

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import ctypes
 import math
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, QThread, Qt, Signal, QTimer
+from PySide6.QtCore import QFile, QObject, QRectF, QThread, Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -17,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -39,14 +43,18 @@ CATEGORY_EXTENSIONS: dict[str, set[str]] = {
     "ドキュメント": {
         ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".pdf", ".md", ".csv", ".json", ".xml", ".html", ".htm",
     },
-    "音楽": {".mp3", ".aac", ".ogg", ".flac", ".wav", ".m4a", ".wma", ".opus", ".aiff"},
+    "画像": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".svg", ".heic", ".ico", ".psd", ".ai"},
+    "音声": {".mp3", ".aac", ".ogg", ".flac", ".wav", ".m4a", ".wma", ".opus", ".aiff"},
     "ビデオ": {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm", ".flv", ".m4v", ".ts"},
-    "プログラム": {".exe", ".msi", ".dll", ".sys", ".bat", ".cmd", ".ps1", ".vbs", ".jar", ".py", ".js", ".ts", ".sh", ".app"},
+    "アーカイブ": {".zip", ".7z", ".rar", ".wim", ".vhdx", ".vhd", ".iso", ".tar", ".gz", ".xz", ".lz", ".lzma", ".bz2", ".tgz", ".cab", ".jar"},
+    "プログラム": {".exe", ".msi", ".dll", ".sys", ".bat", ".cmd", ".ps1", ".vbs", ".py", ".js", ".ts", ".sh", ".app"},
 }
 CATEGORY_COLORS: dict[str, str] = {
     "ドキュメント": "#64b5f6",
-    "音楽": "#81c784",
+    "画像": "#4db6ac",
+    "音声": "#81c784",
     "ビデオ": "#ffb74d",
+    "アーカイブ": "#f06292",
     "プログラム": "#ba68c8",
     "その他": "#b0bec5",
 }
@@ -54,6 +62,9 @@ CATEGORY_COLORS: dict[str, str] = {
 
 def _category_for(path: Path) -> str:
     suffix = path.suffix.lower()
+    # .001 / .002 のような分割アーカイブもアーカイブとして扱います。
+    if re.fullmatch(r"\.\d{3}", suffix or ""):
+        return "アーカイブ"
     for category, suffixes in CATEGORY_EXTENSIONS.items():
         if suffix in suffixes:
             return category
@@ -297,6 +308,43 @@ class FileAnalysisWorker(QObject):
 
 
 
+def _windows_no_console_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
+def _open_path(path: str) -> None:
+    if os.name == "nt":
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path], **_windows_no_console_kwargs())
+    else:
+        subprocess.Popen(["xdg-open", path], **_windows_no_console_kwargs())
+
+
+def _open_parent_select(path: str) -> None:
+    file_path = Path(path)
+    if os.name == "nt":
+        subprocess.Popen(["explorer", f"/select,{file_path}"], **_windows_no_console_kwargs())
+    else:
+        _open_path(str(file_path.parent))
+
+
+def _show_system_file_properties(path: str) -> None:
+    if os.name == "nt":
+        result = ctypes.windll.shell32.ShellExecuteW(None, "properties", str(path), None, None, 1)  # type: ignore[attr-defined]
+        if int(result) <= 32:
+            raise OSError(f"ShellExecuteW properties failed: code={int(result)}")
+    else:
+        raise OSError("この環境ではシステムのファイルプロパティを呼び出せません。")
+
 
 class FileListDialog(QDialog):
     PAGE_SIZE = 100
@@ -338,6 +386,8 @@ class FileListDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_file_context_menu)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
@@ -357,6 +407,93 @@ class FileListDialog(QDialog):
     def _set_loading(self, loading: bool) -> None:
         self.loading_progress.setVisible(loading)
         self.table.setEnabled(not loading)
+
+    def _file_path_from_row(self, row: int) -> str:
+        item = self.table.item(row, 0)
+        if item is None:
+            return ""
+        return str(item.data(Qt.UserRole) or item.text()).strip()
+
+    def _show_file_context_menu(self, pos) -> None:
+        item = self.table.itemAt(pos)
+        if item is None:
+            return
+        row = item.row()
+        path = self._file_path_from_row(row)
+        if not path:
+            return
+        menu = QMenu(self)
+        open_action = menu.addAction("ファイルを開く")
+        folder_action = menu.addAction("ファイルがあるフォルダを開く")
+        prop_action = menu.addAction("ファイル属性")
+        menu.addSeparator()
+        delete_action = menu.addAction("ファイルを削除")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen == open_action:
+            self._open_file(path)
+        elif chosen == folder_action:
+            self._open_file_folder(path)
+        elif chosen == prop_action:
+            self._open_file_properties(path)
+        elif chosen == delete_action:
+            self._delete_file(path)
+
+    def _open_file(self, path: str) -> None:
+        try:
+            _open_path(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "起動失敗", f"ファイルを開けませんでした。\n{path}\n\n{exc}")
+
+    def _open_file_folder(self, path: str) -> None:
+        try:
+            _open_parent_select(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "起動失敗", f"フォルダを開けませんでした。\n{path}\n\n{exc}")
+
+    def _open_file_properties(self, path: str) -> None:
+        try:
+            _show_system_file_properties(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "表示失敗", f"ファイル属性を表示できませんでした。\n{path}\n\n{exc}")
+
+    def _delete_file(self, path: str) -> None:
+        file_path = Path(path)
+        if not file_path.exists() or not file_path.is_file():
+            QMessageBox.information(self, "削除不可", "ファイルが見つかりません。")
+            return
+        first = QMessageBox.question(
+            self,
+            "削除確認 1/2",
+            f"このファイルを削除しますか？\n\n{file_path}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if first != QMessageBox.Yes:
+            return
+        second = QMessageBox.question(
+            self,
+            "削除確認 2/2",
+            "本当に削除しますか？この操作は環境によって元に戻せない場合があります。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if second != QMessageBox.Yes:
+            return
+        try:
+            moved = False
+            try:
+                moved = QFile.moveToTrash(str(file_path))
+            except Exception:
+                moved = False
+            if not moved:
+                file_path.unlink()
+            self._original_files = [(p, s) for p, s in self._original_files if p != str(file_path)]
+            self.files = [(p, s) for p, s in self.files if p != str(file_path)]
+            self.current_page = min(self.current_page, self.total_pages)
+            self._set_loading(True)
+            QTimer.singleShot(0, self._render_current_page)
+        except Exception as exc:
+            QMessageBox.warning(self, "削除失敗", f"ファイルを削除できませんでした。\n{file_path}\n\n{exc}")
 
     def _on_header_clicked(self, section: int) -> None:
         # サイズ列のみソート対象にする。
@@ -384,6 +521,7 @@ class FileListDialog(QDialog):
             self.table.insertRow(row)
             file_item = QTableWidgetItem(path)
             file_item.setFlags(file_item.flags() & ~Qt.ItemIsEditable)
+            file_item.setData(Qt.UserRole, path)
             size_item = QTableWidgetItem(format_bytes(size, decimals))
             size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
             size_item.setData(Qt.UserRole, int(size))

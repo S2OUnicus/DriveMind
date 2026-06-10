@@ -5,6 +5,23 @@ import os
 import platform
 import subprocess
 import uuid
+from typing import Any
+
+
+def _windows_subprocess_kwargs() -> dict[str, Any]:
+    """PyInstaller --noconsole 実行時でも補助コマンドの黒いコンソールを出さないための共通設定です。"""
+    if os.name != "nt":
+        return {}
+    try:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        return {
+            "startupinfo": startupinfo,
+            "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        }
+    except Exception:
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 def _windows_machine_guid() -> str:
@@ -36,7 +53,7 @@ def _windows_smbios_uuid() -> str:
     ]
     for command in commands:
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+            result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False, **_windows_subprocess_kwargs())
             text = (result.stdout or "").strip()
             lines = [line.strip() for line in text.splitlines() if line.strip()]
             for line in lines:

@@ -33,6 +33,7 @@ def _windows_subprocess_kwargs() -> dict[str, Any]:
         return {}
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
     return {
         "startupinfo": startupinfo,
         "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -97,6 +98,7 @@ def _windows_disk_inventory() -> tuple[
     dict[int, dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
     set[int],
 ]:
     """Windowsの物理ディスクと論理ドライブの対応を取得します。
@@ -135,7 +137,13 @@ foreach ($p in (Get-Partition)) {
 $links = Get-CimInstance Win32_LogicalDiskToPartition | Select-Object Antecedent,Dependent
 $physical = Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,SerialNumber,MediaType,BusType,Size
 $logical = Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,ProviderName,VolumeName,FileSystem
-[PSCustomObject]@{Disks=$disks;Win32=$win32;Partitions=$parts;Volumes=$volumes;Links=$links;Physical=$physical;Logical=$logical} | ConvertTo-Json -Depth 8 -Compress
+$bitlocker = @()
+try {
+  if (Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue) {
+    $bitlocker = Get-BitLockerVolume | Select-Object MountPoint,VolumeStatus,ProtectionStatus,LockStatus,EncryptionPercentage
+  }
+} catch {}
+[PSCustomObject]@{Disks=$disks;Win32=$win32;Partitions=$parts;Volumes=$volumes;Links=$links;Physical=$physical;Logical=$logical;BitLocker=$bitlocker} | ConvertTo-Json -Depth 8 -Compress
 '''
     data = _powershell_json(script)
     disks_by_index: dict[int, dict[str, Any]] = {}
@@ -144,6 +152,7 @@ $logical = Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,
     physical_by_index: dict[int, dict[str, Any]] = {}
     volume_meta: dict[str, dict[str, Any]] = {}
     logical_meta: dict[str, dict[str, Any]] = {}
+    bitlocker_meta: dict[str, dict[str, Any]] = {}
     system_disks: set[int] = set()
 
     # Get-Disk を優先します。Number は Get-Partition の DiskNumber と対応します。
@@ -214,12 +223,20 @@ $logical = Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,
         if drive:
             logical_meta[drive] = dict(logical)
 
+
+    for bl in _ensure_list(data.get("BitLocker")):
+        mount = str(bl.get("MountPoint", "")).upper().strip()
+        if mount.endswith("\\"):
+            mount = mount[:-1]
+        if mount and len(mount) >= 2 and mount[1] == ":":
+            bitlocker_meta[mount[:2]] = dict(bl)
+
     # OSのSystemDriveが分かる場合は、そのドライブを含むディスクをシステムディスクとして扱います。
     system_drive = os.environ.get("SystemDrive", "").upper().strip()
     if system_drive in drive_to_disk:
         system_disks.add(drive_to_disk[system_drive])
 
-    return disks_by_index, drive_to_disk, partition_counts, physical_by_index, volume_meta, logical_meta, system_disks
+    return disks_by_index, drive_to_disk, partition_counts, physical_by_index, volume_meta, logical_meta, bitlocker_meta, system_disks
 
 
 def _normalize_media_type(*values: str) -> str:
@@ -306,6 +323,54 @@ def _should_show_partition(config: ConfigManager, partition_kind: str, attribute
     return True
 
 
+def _ntfs_version(drive: str) -> str:
+    """NTFS の詳細バージョンを取得します。取得できない場合は空文字です。"""
+    if os.name != "nt" or not drive:
+        return ""
+    target = drive if drive.endswith(":") else drive[:2]
+    try:
+        result = subprocess.run(
+            ["fsutil", "fsinfo", "ntfsinfo", target],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+            **_windows_subprocess_kwargs(),
+        )
+        text = (result.stdout or "") + "\n" + (result.stderr or "")
+        match = re.search(r"NTFS\s+Version\s*[:：]\s*([0-9.]+)", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _bitlocker_icon(meta: dict[str, Any], device: DeviceInfo | None = None) -> str:
+    """ファイルシステム列に付ける状態アイコンを決めます。"""
+    if meta:
+        text = " ".join(str(meta.get(k, "")) for k in ["VolumeStatus", "ProtectionStatus", "LockStatus", "EncryptionPercentage"]).lower()
+        used = not ("fullydecrypted" in text and ("off" in text or "0" in text))
+        if used:
+            locked = "locked" in str(meta.get("LockStatus", "")).lower()
+            return "🔐" if locked else "🔓"
+    if device is not None and device.is_internal:
+        return "💾"
+    return "💿"
+
+
+def _display_file_system(base_fs: str, drive: str, device: DeviceInfo, bitlocker: dict[str, Any]) -> str:
+    fs = (base_fs or "").strip()
+    if not fs:
+        return ""
+    fs_upper = fs.upper()
+    if fs_upper == "NTFS":
+        version = _ntfs_version(drive)
+        if version:
+            fs = f"NTFS {version}"
+    return f"{_bitlocker_icon(bitlocker, device)} {fs}".strip()
+
+
 class DriveScanner:
     def __init__(self, config: ConfigManager) -> None:
         self.config = config
@@ -330,6 +395,7 @@ class DriveScanner:
             physical_by_index,
             volume_meta,
             logical_meta,
+            bitlocker_meta,
             system_disks,
         ) = _windows_disk_inventory()
         device_map: dict[int, DeviceInfo] = {}
@@ -417,7 +483,8 @@ class DriveScanner:
             meta = volume_meta.get(drive, {})
             logical = logical_meta.get(drive, {})
             label = label or str(meta.get("Label") or logical.get("VolumeName") or "")
-            fstype = partition.fstype or fs_name or str(meta.get("FileSystem") or logical.get("FileSystem") or "")
+            base_fstype = partition.fstype or fs_name or str(meta.get("FileSystem") or logical.get("FileSystem") or "")
+            fstype = _display_file_system(base_fstype, drive, device, bitlocker_meta.get(drive, {}))
             partition_kind = _partition_kind(meta)
             attributes = list(dict.fromkeys(volume_attrs))
             opts = (partition.opts or "").lower()
