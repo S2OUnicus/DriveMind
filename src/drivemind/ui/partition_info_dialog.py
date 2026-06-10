@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -95,36 +96,93 @@ class UsagePolarWidget(QWidget):
         painter.drawText(rect, Qt.AlignCenter, f"{format_percent(percent, percent_decimals)}\n{format_bytes(self.volume.used, decimals)} / {format_bytes(self.volume.total, decimals)}")
 
 
-class PiePadWidget(QWidget):
+class DoughnutChartWidget(QWidget):
+    categoryHovered = Signal(str)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.values: dict[str, int] = {}
-        self.setMinimumSize(260, 240)
+        self.values: list[tuple[str, int]] = []
+        self._segments: list[tuple[str, float, float]] = []
+        self._hover_category = ""
+        self.setMinimumSize(280, 250)
+        self.setMouseTracking(True)
 
-    def set_values(self, values: dict[str, int]) -> None:
-        self.values = dict(values)
+    def set_values(self, values: dict[str, int] | list[tuple[str, int]]) -> None:
+        self.values = list(values.items()) if isinstance(values, dict) else list(values)
+        self._hover_category = ""
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        rect = QRectF(self.rect()).adjusted(20, 20, -20, -20)
-        total = sum(v for v in self.values.values() if v > 0)
+        rect = QRectF(self.rect()).adjusted(24, 18, -24, -18)
+        total = sum(v for _, v in self.values if v > 0)
+        self._segments = []
         if total <= 0:
             painter.setPen(self.palette().color(self.foregroundRole()))
             painter.drawText(rect, Qt.AlignCenter, "分析結果なし")
             return
+
         start = 90.0
-        pad = 2.0
-        for name, value in self.values.items():
+        for name, value in self.values:
             if value <= 0:
                 continue
-            span = max(0.0, 360.0 * value / total - pad)
+            span = 360.0 * value / total
+            color = QColor(CATEGORY_COLORS.get(name, "#b0bec5"))
+            if name == self._hover_category:
+                color = color.lighter(118)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(CATEGORY_COLORS.get(name, "#b0bec5")))
+            painter.setBrush(color)
             painter.drawPie(rect, int(start * 16), int(-span * 16))
-            start -= span + pad
+            self._segments.append((name, start, start - span))
+            start -= span
 
+        inner = rect.adjusted(rect.width() * 0.24, rect.height() * 0.24, -rect.width() * 0.24, -rect.height() * 0.24)
+        painter.setBrush(self.palette().color(self.backgroundRole()))
+        painter.setPen(QPen(QColor("#606060"), 1))
+        painter.drawEllipse(inner)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(inner, Qt.AlignCenter, "File\nAnalysis")
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        category = self._category_at(event.position().x(), event.position().y())
+        if category != self._hover_category:
+            self._hover_category = category
+            self.categoryHovered.emit(category)
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if self._hover_category:
+            self._hover_category = ""
+            self.categoryHovered.emit("")
+            self.update()
+        super().leaveEvent(event)
+
+    def _category_at(self, x: float, y: float) -> str:
+        rect = QRectF(self.rect()).adjusted(24, 18, -24, -18)
+        cx, cy = rect.center().x(), rect.center().y()
+        dx, dy = x - cx, y - cy
+        radius = math.hypot(dx, dy)
+        outer = min(rect.width(), rect.height()) / 2.0
+        inner = outer * 0.48
+        if radius < inner or radius > outer:
+            return ""
+        angle = (math.degrees(math.atan2(-(dy), dx)) + 360.0) % 360.0
+        # drawPie は 90 度から時計回りに描いているので、それに合わせる。
+        clockwise = (90.0 - angle + 360.0) % 360.0
+        cursor = 0.0
+        total = sum(v for _, v in self.values if v > 0)
+        if total <= 0:
+            return ""
+        for name, value in self.values:
+            if value <= 0:
+                continue
+            span = 360.0 * value / total
+            if cursor <= clockwise <= cursor + span:
+                return name
+            cursor += span
+        return ""
 
 
 
@@ -141,40 +199,51 @@ class CategoryCard(QFrame):
     def __init__(self, category: str, summary_text: str, color_hex: str, parent=None) -> None:
         super().__init__(parent)
         self.category = category
+        self.color_hex = color_hex
+        self.summary_text = summary_text
         self.setObjectName("categoryCard")
         self.setCursor(Qt.PointingHandCursor)
-        fg = _foreground_for_background(color_hex)
-        border = QColor(color_hex).darker(115).name()
+        self._highlighted = False
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 10, 8)
+        layout.setSpacing(8)
+        self.label = QLabel(summary_text, self)
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label, 1)
+        button = QPushButton("ファイルリスト", self)
+        button.clicked.connect(lambda: self.openRequested.emit(self.category))
+        layout.addWidget(button, 0)
+        self.set_highlight(False)
+
+    def set_highlight(self, enabled: bool) -> None:
+        self._highlighted = enabled
+        fg = _foreground_for_background(self.color_hex)
+        base = QColor(self.color_hex)
+        bg = base.lighter(118).name() if enabled else base.name()
+        border = base.lighter(170).name() if enabled else base.darker(115).name()
+        width = 3 if enabled else 1
         self.setStyleSheet(
             "QFrame#categoryCard {"
-            f"background-color: {color_hex};"
+            f"background-color: {bg};"
             f"color: {fg};"
-            f"border: 1px solid {border};"
+            f"border: {width}px solid {border};"
             "border-radius: 12px;"
             "}"
             "QPushButton {"
-            "background-color: rgba(255, 255, 255, 0.82);"
+            "background-color: rgba(255, 255, 255, 0.84);"
             "color: #202020;"
             "border: 1px solid rgba(0, 0, 0, 0.18);"
             "border-radius: 8px;"
             "padding: 4px 8px;"
             "}"
-            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.95); }"
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 0.98); }"
         )
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 10, 8)
-        layout.setSpacing(8)
-        label = QLabel(summary_text, self)
-        label.setWordWrap(True)
-        label.setStyleSheet(f"color: {fg};")
-        layout.addWidget(label, 1)
-        button = QPushButton("ファイルリスト", self)
-        button.clicked.connect(lambda: self.openRequested.emit(self.category))
-        layout.addWidget(button, 0)
+        self.label.setStyleSheet(f"color: {fg};")
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         self.openRequested.emit(self.category)
         super().mouseDoubleClickEvent(event)
+
 
 class FileAnalysisWorker(QObject):
     finished = Signal(object, object, object)
@@ -396,6 +465,7 @@ class PartitionInfoDialog(QDialog):
         self._analysis_thread: QThread | None = None
         self._analysis_worker: FileAnalysisWorker | None = None
         self._files_by_category: dict[str, list[tuple[str, int]]] = {}
+        self._category_cards: dict[str, CategoryCard] = {}
         self.setWindowTitle(f"パーティション情報 - {volume.drive}")
         self.resize(900, 680)
         self._build_ui()
@@ -429,7 +499,8 @@ class PartitionInfoDialog(QDialog):
         body_layout.addWidget(self.analysis_progress)
 
         analysis = QHBoxLayout()
-        self.pie_widget = PiePadWidget(body)
+        self.pie_widget = DoughnutChartWidget(body)
+        self.pie_widget.categoryHovered.connect(self._highlight_category)
         analysis.addWidget(self.pie_widget, 1)
         right = QVBoxLayout()
         self.category_scroll = QScrollArea(body)
@@ -515,6 +586,7 @@ class PartitionInfoDialog(QDialog):
         self._analysis_worker = None
 
     def _clear_category_cards(self) -> None:
+        self._category_cards.clear()
         while self.category_layout.count():
             item = self.category_layout.takeAt(0)
             widget = item.widget()
@@ -526,7 +598,6 @@ class PartitionInfoDialog(QDialog):
         self.analysis_progress.hide()
         self.analyze_button.setEnabled(True)
         self._files_by_category = files_by_category
-        self.pie_widget.set_values(totals)
         self._clear_category_cards()
         total = sum(totals.values())
         decimals = int(self.config.get("basic.capacity_decimals", 2))
@@ -540,6 +611,7 @@ class PartitionInfoDialog(QDialog):
         )
         if "その他" in totals:
             ordered.append(("その他", totals.get("その他", 0)))
+        self.pie_widget.set_values(ordered)
 
         # stretch は最後に置くので、カードは stretch の手前へ挿入する。
         stretch_index = max(0, self.category_layout.count() - 1)
@@ -553,12 +625,17 @@ class PartitionInfoDialog(QDialog):
             )
             card = CategoryCard(name, summary, CATEGORY_COLORS.get(name, "#b0bec5"), self.category_container)
             card.openRequested.connect(self._open_category_files)
+            self._category_cards[name] = card
             self.category_layout.insertWidget(stretch_index, card)
             stretch_index += 1
         msg = f"分析完了: {format_bytes(total, decimals)}"
         if errors:
             msg += f" / 読み取りできなかった項目: {len(errors)} 件"
         self.analysis_status.setText(msg)
+
+    def _highlight_category(self, category: str) -> None:
+        for name, card in self._category_cards.items():
+            card.set_highlight(name == category)
 
     def _open_category_files(self, category: str) -> None:
         files = self._files_by_category.get(category, [])

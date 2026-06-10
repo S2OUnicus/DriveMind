@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import fnmatch
 import json
 import os
 import time
@@ -68,6 +69,61 @@ def display_name(path: Path, include_extensions: bool, mark_hidden: bool, flags:
     return name
 
 
+
+ADOBE_PROJECT_SUFFIXES = {
+    ".prproj": "PR-Proj",
+    ".aep": "AE-Proj",
+    ".aepx": "AE-Proj",
+}
+PROGRAM_COMPANION_DIRS = {
+    "bin", "lib", "libs", "include", "share", "resources", "plugins", "plugin", "dist", "build", "runtime", "scripts"
+}
+
+
+def _matches_exclude(name: str, patterns: set[str]) -> bool:
+    lowered = name.lower()
+    for pattern in patterns:
+        if not pattern:
+            continue
+        p = pattern.lower()
+        if fnmatch.fnmatch(lowered, p):
+            return True
+    return False
+
+
+def _adobe_project_label(folder: Path) -> str | None:
+    try:
+        for entry in folder.iterdir():
+            if entry.is_file():
+                prefix = ADOBE_PROJECT_SUFFIXES.get(entry.suffix.lower())
+                if prefix:
+                    return f"{prefix}：{entry.stem}"
+    except OSError:
+        return None
+    return None
+
+
+def _looks_like_program_folder(folder: Path) -> bool:
+    """控えめな判定でプログラムフォルダをまとめます。単体 exe だけでは判定しません。"""
+    try:
+        entries = list(folder.iterdir())
+    except OSError:
+        return False
+    companion_dirs = {e.name.lower() for e in entries if e.is_dir()} & PROGRAM_COMPANION_DIRS
+    if not companion_dirs:
+        return False
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.suffix.lower() == ".exe":
+                return True
+            if entry.is_dir() and entry.name.lower() in {"bin", "runtime"}:
+                for sub in entry.iterdir():
+                    if sub.is_file() and sub.suffix.lower() == ".exe":
+                        return True
+        except OSError:
+            continue
+    return False
+
 class MindmapExporter:
     def __init__(self, config: ConfigManager) -> None:
         self.config = config
@@ -84,25 +140,56 @@ class MindmapExporter:
         max_files_per_folder: int | None = None,
     ) -> Path:
         self.errors.clear()
-        self.max_depth = max(1, int(max_depth if max_depth is not None else self.config.get("mindmap.max_depth", 48)))
-        self.max_files_per_folder = max(0, int(max_files_per_folder if max_files_per_folder is not None else self.config.get("mindmap.max_files_per_folder", 16)))
+        self._set_limits(max_depth, max_files_per_folder)
         output = Path(output_path)
         root = make_node("DriveMind")
+        output_device_name = bool(self.config.get("mindmap.output_device_name", False))
         for device in devices:
             selected_volumes = [v for v in device.volumes if v.key in selected_keys]
             if not selected_volumes:
                 continue
-            device_text = f"{device.display_kind}: {device.name}"
-            device_node = make_node(device_text)
+            device_node = make_node(f"{device.display_kind}: {device.name}") if output_device_name else None
             for volume in selected_volumes:
                 drive_label = volume.label or "無題"
                 drive_name = volume.drive.replace(":", "") if volume.drive else volume.mountpoint
                 volume_node = make_node(f"{drive_name}: {drive_label}")
                 volume_root = Path(volume.mountpoint)
                 volume_node["children"] = self._walk(volume_root, depth=0)
-                device_node["children"].append(volume_node)
-            root["children"].append(device_node)
+                if output_device_name and device_node is not None:
+                    device_node["children"].append(volume_node)
+                else:
+                    root["children"].append(volume_node)
+            if output_device_name and device_node is not None:
+                root["children"].append(device_node)
 
+        return self._write_km(root, output)
+
+    def export_folder(
+        self,
+        folder_path: str | Path,
+        output_path: str | Path,
+        max_depth: int | None = None,
+        max_files_per_folder: int | None = None,
+    ) -> Path:
+        """任意フォルダをルートにして DesktopNaotu 用 .km を出力します。"""
+        self.errors.clear()
+        self._set_limits(max_depth, max_files_per_folder)
+        folder = Path(folder_path)
+        if not folder.exists():
+            raise FileNotFoundError(f"フォルダが見つかりません: {folder}")
+        if not folder.is_dir():
+            raise NotADirectoryError(f"フォルダではありません: {folder}")
+        root = make_node("DriveMind")
+        root_node = make_node(folder.name or str(folder))
+        root_node["children"] = self._walk(folder, depth=0)
+        root["children"].append(root_node)
+        return self._write_km(root, Path(output_path))
+
+    def _set_limits(self, max_depth: int | None, max_files_per_folder: int | None) -> None:
+        self.max_depth = max(1, int(max_depth if max_depth is not None else self.config.get("mindmap.max_depth", 48)))
+        self.max_files_per_folder = max(0, int(max_files_per_folder if max_files_per_folder is not None else self.config.get("mindmap.max_files_per_folder", 16)))
+
+    def _write_km(self, root: dict, output: Path) -> Path:
         km = {
             "root": root,
             "template": "default",
@@ -125,6 +212,8 @@ class MindmapExporter:
         include_system = bool(self.config.get("mindmap.include_system", False))
         include_files = bool(self.config.get("mindmap.include_files", False))
         include_extensions = bool(self.config.get("mindmap.include_extensions", True))
+        include_program_folders = bool(self.config.get("mindmap.include_program_folders", False))
+        adobe_project_folder_only = bool(self.config.get("mindmap.adobe_project_folder_only", True))
 
         nodes: list[dict] = []
         try:
@@ -142,7 +231,7 @@ class MindmapExporter:
         file_count = 0
         skipped_files = 0
         for entry in entries:
-            if entry.name.lower() in exclude_names:
+            if _matches_exclude(entry.name, exclude_names):
                 continue
             flags = path_flags(entry)
             if flags.symlink:
@@ -153,6 +242,13 @@ class MindmapExporter:
                 continue
             try:
                 if entry.is_dir():
+                    adobe_label = _adobe_project_label(entry) if adobe_project_folder_only else None
+                    if adobe_label:
+                        nodes.append(make_node(adobe_label))
+                        continue
+                    if not include_program_folders and _looks_like_program_folder(entry):
+                        nodes.append(make_node(f"プログラム：{entry.name}"))
+                        continue
                     node = make_node(display_name(entry, include_extensions, mark_hidden, flags))
                     node["children"] = self._walk(entry, depth + 1)
                     nodes.append(node)

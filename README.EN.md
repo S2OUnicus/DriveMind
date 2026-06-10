@@ -2,34 +2,33 @@
 
 [日本語](README.md) / [English](README.EN.md) / [中文](README.ZH.md) / [한국어](README.KR.md)
 
-**DriveMind** is a Windows utility for viewing disk information, checking capacity usage, and generating folder-structure mind maps. It can list internal disks, external disks, partitions, drive letters, and volume labels, then export selected drives as DesktopNaotu-compatible `.km` files.
+![DriveMind Brand](docs/screenshots/Brand.png)
 
-> Version: `v2.0.0`  
-> Author: [@S2OUnicus](https://github.com/S2OUnicus)  
-> Project: <https://github.com/S2OUnicus/DriveMind>  
-> License: CC BY-NC-ND 4.0
+DriveMind is a Windows desktop application for checking disk and partition information and exporting selected drives or folders as DesktopNaotu `.km` mind maps.
 
-![DriveMind main window](docs/screenshots/1_Index.png)
+It is useful for storage review, external SSD organization, archive management, project folder visualization, and disk usage checking.
+
+![Main window](docs/screenshots/1_Index.png)
 
 ## What DriveMind can do
 
-- Show connected disks, partitions, drive letters, labels, file systems, and attributes.
-- Display internal and external disk totals separately.
-- Show used space, usage percentage, free space, and total capacity with progress bars.
-- Assign a group, purpose, and memo to each partition.
-- Set colors for groups and show the color in the group column.
-- Export selected drives as DesktopNaotu `.km` mind maps.
-- Open generated `.km` files with DesktopNaotu.
-- Open a partition information panel with usage and file-type analysis.
-- Open categorized file lists with paging and size sorting.
-- Hide or show RAM disks, WebDisks, network drives, and special partitions.
-- Switch the GUI language between Japanese, English, Chinese, and Korean.
-- Switch between darkmode and lightmode.
-- Check GitHub Releases for new versions.
+- Show internal disks, external disks, and partitions in a tree-style list
+- Display used space, free space, and usage percentage with progress bars
+- Save group, purpose, and memo information for each partition
+- Assign colors to groups and show them in the main list
+- Generate DesktopNaotu `.km` mind maps from selected partitions
+- Generate `.km` mind maps from any selected folder
+- Open the latest generated map or any `.km` file with DesktopNaotu
+- Show disk information, partition information, and file category analysis
+- Open file lists from file analysis categories
+- Switch GUI language between Japanese, English, Chinese, and Korean
+- Switch between darkmode and lightmode
+- Check new versions from GitHub Releases
+- Show the Brand image with a fade-in / fade-out splash screen on startup
 
-## Running the development version
+## How to run
 
-Prepare Python 3.10 or later, then run the following commands in the repository folder.
+Run the following commands in the project folder.
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -37,145 +36,167 @@ python -m pip install -e .
 python -m drivemind
 ```
 
-On Windows, you can also use:
-
-```text
-scripts/run_dev.bat
-scripts/run_dev.ps1
-```
-
-Example PyInstaller command:
+Example command for building a Windows executable:
 
 ```powershell
-pyinstaller --onefile --noconsole --name DriveMind --icon=src\drivemind\assets\logo.ico --paths src src\drivemind\__main__.py
+pyinstaller --onefile --noconsole --name DriveMind --icon=src\drivemind\assets\logo_pure.ico --add-data "src\drivemind\assets;drivemind\assets" --paths src src\drivemind\__main__.py
 ```
 
-The executable is usually created at `dist\DriveMind.exe`.
+The generated executable will normally be placed in `dist\DriveMind.exe`.
 
-## Main window
+## Basic usage
 
-The upper area shows a tree list of disks and partitions. The lower area shows capacity totals and action buttons. Physical disks are parent rows; partitions are child rows.
+### 1. Check the disk list
 
-```text
-- Samsung SSD 990 Pro (SSD, internal drive, device: 1)
-  - C: (System)
+When DriveMind starts, the main window shows detected disks and partitions.
+
+Each partition can show drive letter, label, type, file system, usage status, and attributes.
+
+Disk device rows cannot be selected. Only partitions with drive letters can be selected as mind map output targets.
+
+### 2. Edit group, purpose, and memo
+
+Only the following columns are editable in the main window:
+
+- Group
+- Purpose
+- Memo
+
+Groups can be managed from the context menu or the settings window. When a group color is set, it appears only in the group column of the main list.
+
+### 3. Generate a mind map from selected drives
+
+1. Select target partitions with checkboxes
+2. Click `Generate selected tree`
+3. Check the folder depth and file count options
+4. Choose an output path
+5. A DesktopNaotu `.km` file will be generated
+
+The default maximum folder depth is 48 levels, and the default maximum file count in one folder is 16. Subfolders are not counted as files.
+
+### 4. Generate a mind map from any folder
+
+Click `Generate folder tree` and select a folder.
+
+DriveMind will use the selected folder as the root and export only the folder and file structure inside it.
+
+### 5. Open a generated map
+
+Click `Open tree` and choose one of the following options:
+
+- Recent map
+- Any map
+
+`Recent map` is enabled only when the last generated `.km` file still exists.
+
+If the DesktopNaotu path is not configured, select `DesktopNaotu.exe` first.
+
+DriveMind launches DesktopNaotu in this format:
+
+```powershell
+DesktopNaotu.exe DriveMind.km
 ```
-
-Main columns:
-
-| Column | Description |
-|---|---|
-| Select | Select partitions for mind map export. Physical disk rows cannot be selected. |
-| Order | Shows global order and per-device order, such as `1 - 1:1`. |
-| Drive (Label) | Shows the drive letter and volume label, such as `C: (System)`. |
-| Group | User-defined group. Editable. |
-| Purpose | User-defined purpose. Editable. |
-| Type | Internal SSD, external HDD, and so on. |
-| Memo | User memo. Editable. |
-| File system | NTFS, exFAT, and so on. |
-| Usage | Used space, percentage, free space, and total capacity. |
-| Attributes | RO, H, OEM, NL, VSS, and other attributes. |
-
-Only **Group**, **Purpose**, and **Memo** are editable in the main list.
-
-You can click these column headers to sort the list: Order, Drive, Group, Type, and Usage. The default order is drive letter A-Z.
-
-## Refreshing disk information
-
-The disk list is refreshed automatically every 3 minutes by default. Press **Refresh** to update immediately. A loading indicator is shown while disk information is being collected.
 
 ## Disk information
 
-Press **Disk Information** to open the disk information window. It summarizes all disks, internal disks, and external disks. You can view disk names, device order, internal/external classification, interface, partition count, usage, UUID, and S.M.A.R.T. information. The information can be saved as a TXT report.
+Click `Disk information` to view summary information for all disks, internal disks, and external disks.
 
-## Generating a mind map
+You can check capacity, used space, free space, partition count, and interface information.
 
-1. Select the partitions you want to export.
-2. Press **Generate Tree**.
-3. Confirm the maximum folder depth and maximum number of files per folder.
-4. Select an output path.
-5. A DesktopNaotu-compatible `.km` file is generated.
+## Partition information
 
-Default export limits:
+Right-click a partition and choose `Partition information` to view details for that partition.
 
-| Option | Default |
-|---|---:|
-| Maximum folder depth | 48 |
-| Maximum files in the same folder | 16 |
-
-Subfolders are not counted as files.
-
-Basic output structure:
-
-```text
-- Attribute: Device name
-  - Drive letter: Label
-    - Folder
-      - Subfolder
-```
-
-## Opening a mind map
-
-Press **Open Tree** to open the last generated `.km` file with DesktopNaotu. On first use, select the DesktopNaotu executable. Long-press the button to choose another `.km` file.
-
-## Partition context menu
-
-Right-click a partition row to open it, generate a mind map for that partition, change its group, open partition information, edit purpose, or edit memo.
-
-## Partition information and file analysis
-
-The partition information window shows the selected partition, its device, capacity, attributes, and circular usage display. Press **File Analysis** to categorize files into:
+Usage is shown as a Doughnut Chart. File analysis can classify files into categories such as:
 
 - Documents
 - Music
-- Videos
+- Video
 - Programs
-- Other
+- Others
 
-After analysis, category cards show size and file count. **Other** is always placed at the bottom; the remaining categories are sorted by size. Press **File List** or double-click a card to open the categorized file list. The file list shows 100 items per page and can sort by file size.
+Click the `File list` button for a category to open a list of files in that category.
 
 ## Settings
 
-Open **Settings** to change DriveMind behavior.
+Open `Settings` to configure DriveMind.
 
-| Tab | Description |
-|---|---|
-| Basic | Refresh interval, language, theme, special partitions, RAMDisk/WebDisk/remote-drive display, admin launch, config file path. |
-| DesktopNaotu | DesktopNaotu executable path. |
-| Mindmap | Folder/file output rules, depth limit, file count limit. |
-| Group | Group names, colors, and related partitions. |
-| Purpose | Purpose text per partition. |
-| Memo | Memo text per partition. |
-| Other | Update checks, reset version notices, reset all settings. |
+### General
 
-## Language and theme
+- Auto refresh interval
+- Language
+- Theme
+- Run as administrator
+- Show or hide RAMDisk / WebDisk / network drives
+- Show or hide ESP / MSR / OEM / read-only / hidden partitions
 
-The top-right area of the main window contains a theme button and a language list.
+### DesktopNaotu
 
-- Theme: `darkmode` / `lightmode`
-- Languages: Japanese, English, Chinese, Korean
+- Path to `DesktopNaotu.exe`
 
-The same options are also available in **Settings > Basic**. The default is Japanese and darkmode.
+### Mind map
 
-## Update check
+- Maximum folder depth
+- Maximum file count in one folder
+- Output device name or not
+- Hidden/system file options
+- Extension output option
+- Excluded names and extensions
+- Program folder output option
+- Adobe project folder-only output option
 
-DriveMind can check GitHub Releases and notify you when a new version is available. The interval can be changed in **Settings > Other**. DriveMind only opens the Release page; it does not automatically download or install updates.
+### Groups
 
-## DesktopNaotu
+- Add and delete groups
+- Set group colors
+- View partitions that belong to the selected group
 
-DriveMind generates `.km` files but does not include DesktopNaotu. Prepare DesktopNaotu separately to open the generated mind maps.
+### Purpose and memo management
 
-DesktopNaotu: <https://github.com/naotu/desktopnaotu>
+Purpose and memo are managed as one-to-one settings for each partition. Duplicate text is allowed.
 
-## License
+### Log
 
-DriveMind is released under **CC BY-NC-ND 4.0**. Attribution is required, non-commercial sharing is allowed, and distributing modified versions is not allowed. See `LICENSE`, `LICENSE.ja`, `LICENSE.zh`, and `LICENSE.kr`.
+- Log level
+- Retention days
+- Size limit
+- Current log size
+- Open logs
+- Delete all logs
 
-## Changelog
+### Other
 
-See `CHANGELOG.md` for changes.
+- Update check frequency
+- Reset hidden update notifications
+- Reset all settings
+
+## Mind map output notes
+
+By default, DriveMind excludes temporary and management files such as:
+
+- `node_modules`
+- `__pycache__`
+- folders starting with `_`
+- IDE setting folders
+- `.log` files
+- `.tmp` files
+- Office temporary files
+- `.DS_Store`
+- `Thumbs.db`
+- `desktop.ini`
+- `autorun.inf`
+
+You can change these options from `Settings > Mind map`.
 
 ## Screenshots
+
+### Main window / darkmode
+
+![Main window](docs/screenshots/1_Index.png)
+
+### Main window / lightmode
+
+![Main window lightmode](docs/screenshots/1_Index_LightMode.png)
 
 ### Disk information
 
@@ -185,9 +206,13 @@ See `CHANGELOG.md` for changes.
 
 ![Partition information](docs/screenshots/3_PartitionInfo.png)
 
-### File list
+### General settings
 
-![File list](docs/screenshots/4_FileList.png)
+![General settings](docs/screenshots/5_Settings_General.png)
+
+### Mind map settings
+
+![Mind map settings](docs/screenshots/5_Settings_Mindmap.png)
 
 ### Group settings
 
@@ -195,4 +220,11 @@ See `CHANGELOG.md` for changes.
 
 ## Author
 
-[@S2OUnicus](https://github.com/S2OUnicus)
+- Author: [@S2OUnicus](https://github.com/S2OUnicus)
+- Project: <https://github.com/S2OUnicus/DriveMind>
+
+## License
+
+This project is released under `CC-BY-NC-ND-4.0`.
+
+Commercial use and redistribution of modified versions are not permitted. See `LICENSE` for details.

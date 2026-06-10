@@ -2,34 +2,33 @@
 
 [日本語](README.md) / [English](README.EN.md) / [中文](README.ZH.md) / [한국어](README.KR.md)
 
-**DriveMind** 是面向 Windows 的磁盘信息查看、容量确认、文件夹结构思维导图生成工具。它可以显示内部磁盘、外部磁盘、分区、盘符和卷标，并将选中的驱动器导出为 DesktopNaotu 可用的 `.km` 文件。
+![DriveMind Brand](docs/screenshots/Brand.png)
 
-> 版本：`v2.0.0`  
-> 作者：[@S2OUnicus](https://github.com/S2OUnicus)  
-> 项目：<https://github.com/S2OUnicus/DriveMind>  
-> 许可证：CC BY-NC-ND 4.0
+DriveMind 是一款 Windows 桌面程序，用于查看磁盘与分区信息，并将选中的驱动器或任意文件夹结构导出为 DesktopNaotu 可打开的 `.km` 思维导图文件。
 
-![DriveMind 主界面](docs/screenshots/1_Index.png)
+它适合用于磁盘容量检查、外置 SSD 整理、资料盘盘点、项目文件夹可视化等场景。
+
+![主界面](docs/screenshots/1_Index.png)
 
 ## 可以做什么
 
-- 显示已连接的磁盘、分区、盘符、卷标、文件系统和属性。
-- 分别显示内部磁盘和外部磁盘的容量总计。
-- 通过进度条显示已用容量、使用率、剩余容量和总容量。
-- 为每个分区设置分组、用途和备注。
-- 为分组设置颜色，并显示在主界面的分组列。
-- 将选中的驱动器导出为 DesktopNaotu 用 `.km` 思维导图。
-- 使用 DesktopNaotu 打开生成的 `.km` 文件。
-- 在分区信息窗口查看容量、属性、使用率和文件类型分析。
-- 按分类打开文件列表，支持分页和按大小排序。
-- 设置是否显示 RAM 磁盘、WebDisk、网络驱动器和特殊分区。
-- GUI 支持日语、英语、中文和韩语切换。
-- 支持 darkmode / lightmode 切换。
-- 从 GitHub Releases 检查新版本。
+- 查看内部磁盘、外部磁盘和分区列表
+- 使用进度条显示已用容量、剩余容量和使用率
+- 为每个分区记录组、用途和备忘
+- 为组设置颜色，并显示在主界面的组列中
+- 将选中的分区导出为 DesktopNaotu `.km` 思维导图
+- 将任意文件夹作为根目录生成 `.km` 思维导图
+- 用 DesktopNaotu 打开最近生成的地图或任意 `.km` 文件
+- 查看磁盘信息、分区信息和文件分类分析
+- 从分类分析结果中打开对应的文件列表
+- 在日语、英语、中文、韩语之间切换 GUI 语言
+- 在 darkmode 和 lightmode 之间切换主题
+- 从 GitHub Releases 检查新版本
+- 启动时以淡入淡出的方式显示 Brand 图片
 
-## 启动开发版
+## 启动方法
 
-需要 Python 3.10 或更高版本。在仓库目录中执行：
+在项目文件夹中执行以下命令。
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -37,130 +36,167 @@ python -m pip install -e .
 python -m drivemind
 ```
 
-Windows 也可以使用：
-
-```text
-scripts/run_dev.bat
-scripts/run_dev.ps1
-```
-
-PyInstaller 打包示例：
+构建 Windows exe 的示例命令如下。
 
 ```powershell
-pyinstaller --onefile --noconsole --name DriveMind --icon=src\drivemind\assets\logo.ico --paths src src\drivemind\__main__.py
+pyinstaller --onefile --noconsole --name DriveMind --icon=src\drivemind\assets\logo_pure.ico --add-data "src\drivemind\assets;drivemind\assets" --paths src src\drivemind\__main__.py
 ```
 
 生成的程序通常位于 `dist\DriveMind.exe`。
 
-## 主界面
+## 基本使用方法
 
-上半部分是磁盘和分区列表，下半部分是容量总计和功能按钮。物理磁盘作为父项显示，分区作为子项显示。
+### 1. 查看磁盘列表
 
-```text
-- Samsung SSD 990 Pro（SSD，内部驱动器，设备: 1）
-  - C: （系统）
+启动 DriveMind 后，主界面会显示检测到的磁盘与分区。
+
+每个分区会显示盘符、标签、类型、文件系统、使用情况和属性等信息。
+
+磁盘设备本身不能被选中。可以作为 `.km` 输出对象的是带有盘符的分区。
+
+### 2. 编辑组、用途和备忘
+
+主界面中只有以下列可以编辑：
+
+- 组
+- 用途
+- 备忘
+
+组可以通过右键菜单或设置窗口管理。为组设置颜色后，该颜色只会显示在主列表的组列中。
+
+### 3. 从选中的驱动器生成思维导图
+
+1. 使用左侧复选框选择目标分区
+2. 点击 `选择した木生成`
+3. 确认文件夹最大层级、单个文件夹最大文件数等选项
+4. 选择保存路径
+5. 生成 DesktopNaotu `.km` 文件
+
+默认最大文件夹层级为 48 层，单个文件夹内最多输出 16 个文件。子文件夹不计入文件数。
+
+### 4. 从任意文件夹生成思维导图
+
+点击 `フォルダ木生成` 后选择一个文件夹。
+
+DriveMind 会把该文件夹作为根目录，只导出其中的文件夹与文件结构。
+
+### 5. 打开生成的地图
+
+点击 `木閲覧` 后，可以选择：
+
+- 最近的地图
+- 任意地图
+
+只有最后生成的 `.km` 文件仍然存在时，`最近的地图` 才可用。
+
+如果尚未设置 DesktopNaotu 路径，需要先选择 `DesktopNaotu.exe`。
+
+DriveMind 会以以下形式启动 DesktopNaotu：
+
+```powershell
+DesktopNaotu.exe DriveMind.km
 ```
-
-主要列：
-
-| 列 | 说明 |
-|---|---|
-| 选择 | 选择要导出到思维导图的分区。物理磁盘本体不能选择。 |
-| 顺序 | 以 `1 - 1:1` 显示全局顺序和设备内顺序。 |
-| 驱动器（卷标） | 例如 `C: （系统）`。 |
-| 分组 | 用户自定义分类，可编辑。 |
-| 用途 | 例如系统、工作、备份，可编辑。 |
-| 类型 | 内部 SSD、外部 HDD 等。 |
-| 备注 | 用户备注，可编辑。 |
-| 文件系统 | NTFS、exFAT 等。 |
-| 使用情况 | 已用容量、使用率、剩余容量、总容量。 |
-| 属性 | RO、H、OEM、NL、VSS 等。 |
-
-主列表中只有 **分组**、**用途**、**备注** 可以编辑。
-
-点击“顺序、驱动器、分组、类型、使用情况”的列名可以排序。默认按盘符 A-Z 排列。
-
-## 更新磁盘信息
-
-默认每 3 分钟自动刷新一次磁盘列表。需要立即更新时，点击 **刷新**。读取磁盘信息时会显示加载动画。
 
 ## 磁盘信息
 
-点击 **磁盘信息** 可以打开磁盘信息窗口，查看总计、内部磁盘、外部磁盘等信息，包括磁盘名、设备顺序、内部/外部分类、接口、分区数量、使用情况、UUID 和 S.M.A.R.T 信息。信息可以保存为 TXT 报告。
+点击 `ディスク情報` 可以查看所有磁盘、内部磁盘、外部磁盘的汇总信息。
 
-## 生成思维导图
+可以确认容量、已用空间、剩余空间、分区数和接口信息。
 
-1. 勾选要导出的分区。
-2. 点击 **生成树**。
-3. 确认最大文件夹层级和同一文件夹内最大文件数量。
-4. 选择保存位置。
-5. 生成 DesktopNaotu 兼容的 `.km` 文件。
+## 分区信息
 
-默认限制：
+右键分区并选择 `パーティション情報`，可以查看该分区的详细信息。
 
-| 项目 | 默认值 |
-|---|---:|
-| 最大文件夹层级 | 48 |
-| 同一文件夹内最大文件数 | 16 |
+使用率会以 Doughnut Chart 显示。文件分析会把文件分类为：
 
-子文件夹不计入文件数量限制。
+- 文档
+- 音乐
+- 视频
+- 程序
+- 其他
 
-## 打开思维导图
-
-点击 **查看树** 可以用 DesktopNaotu 打开最后生成的 `.km` 文件。第一次使用时需要选择 DesktopNaotu 的可执行文件。长按按钮可以选择其他 `.km` 文件。
-
-## 分区右键菜单
-
-右键点击分区行，可以打开分区、仅为该分区生成树、修改分组、查看分区信息、编辑用途和编辑备注。
-
-## 分区信息与文件分析
-
-分区信息窗口显示所选分区的设备、容量、属性和圆形使用率。点击 **文件分析** 后，会将文件分类为文档、音乐、视频、程序和其他。
-
-分析后，右侧分类卡片显示容量和文件数量。`其他` 固定在最下方，其余分类按容量从大到小排列。点击 **文件列表** 或双击卡片，可以打开该分类的文件列表。文件列表每页 100 项，并支持按大小排序。
+点击分类项旁边的 `ファイルリスト` 按钮，可以打开该分类下的文件列表。
 
 ## 设置
 
-点击 **设置** 可以调整 DriveMind。
+点击 `設定` 可以修改各种选项。
 
-| 标签页 | 内容 |
-|---|---|
-| 基本设置 | 自动刷新间隔、语言、主题、特殊分区、RAMDisk/WebDisk/远程驱动器显示、管理员启动、配置文件路径。 |
-| DesktopNaotu | DesktopNaotu 可执行文件路径。 |
-| 思维导图 | 输出规则、层级限制、文件数量限制。 |
-| 分组 | 分组名、颜色和关联分区。 |
-| 用途管理 | 每个分区的用途。 |
-| 备注管理 | 每个分区的备注。 |
-| 其他 | 更新检查、版本提示重置、全部设置初始化。 |
+### 基本设置
 
-## 语言与主题
+- 自动刷新间隔
+- 语言
+- 主题
+- 是否以管理员身份启动
+- 是否显示 RAMDisk / WebDisk / 网络驱动器
+- 是否显示 ESP / MSR / OEM / 只读 / 隐藏分区
 
-主窗口右上角有主题按钮和语言列表。
+### DesktopNaotu
 
-- 主题：`darkmode` / `lightmode`
-- 语言：日语、英语、中文、韩语
+- `DesktopNaotu.exe` 的路径
 
-也可以在 **设置 > 基本设置** 中修改。默认是日语和 darkmode。
+### 思维导图
 
-## 更新检查
+- 文件夹最大层级
+- 单个文件夹最大文件数
+- 是否输出设备名
+- 隐藏文件和系统文件的处理
+- 是否输出扩展名
+- 不输出的名称和扩展名
+- 是否输出程序文件夹内部内容
+- Adobe 项目是否只输出文件夹
 
-DriveMind 可以检查 GitHub Releases，并在有新版本时提示。DriveMind 只会打开 Release 页面，不会自动下载或自动安装。
+### 组
 
-## DesktopNaotu
+- 添加和删除组
+- 设置组颜色
+- 查看属于选中组的分区列表
 
-DriveMind 生成 `.km` 文件，但不包含 DesktopNaotu 本体。请另外准备 DesktopNaotu。
+### 用途与备忘管理
 
-DesktopNaotu：<https://github.com/naotu/desktopnaotu>
+用途和备忘按分区一对一管理。允许重复内容。
 
-## 许可证
+### 日志
 
-DriveMind 使用 **CC BY-NC-ND 4.0** 发布。需要署名，允许非商业分享，不允许分发修改版本。请查看 `LICENSE`、`LICENSE.ja`、`LICENSE.zh`、`LICENSE.kr`。
+- 日志级别
+- 保留天数
+- 大小限制
+- 当前日志大小
+- 打开日志
+- 删除全部日志
 
-## 更新历史
+### 其他
 
-请查看 `CHANGELOG.md`。
+- 更新检查频率
+- 重置版本提示
+- 初始化全部设置
+
+## 思维导图输出补充
+
+默认情况下，DriveMind 会排除以下临时文件或管理文件：
+
+- `node_modules`
+- `__pycache__`
+- `_` 开头的部分文件夹
+- IDE 设置文件夹
+- `.log` 文件
+- `.tmp` 文件
+- Office 临时文件
+- `.DS_Store`
+- `Thumbs.db`
+- `desktop.ini`
+- `autorun.inf`
+
+这些选项可以在 `设置 > 思维导图` 中修改。
 
 ## 截图
+
+### 主界面 / darkmode
+
+![主界面](docs/screenshots/1_Index.png)
+
+### 主界面 / lightmode
+
+![主界面 lightmode](docs/screenshots/1_Index_LightMode.png)
 
 ### 磁盘信息
 
@@ -170,14 +206,25 @@ DriveMind 使用 **CC BY-NC-ND 4.0** 发布。需要署名，允许非商业分�
 
 ![分区信息](docs/screenshots/3_PartitionInfo.png)
 
-### 文件列表
+### 基本设置
 
-![文件列表](docs/screenshots/4_FileList.png)
+![基本设置](docs/screenshots/5_Settings_General.png)
 
-### 分组设置
+### 思维导图设置
 
-![分组设置](docs/screenshots/5_Settings_Group.png)
+![思维导图设置](docs/screenshots/5_Settings_Mindmap.png)
+
+### 组设置
+
+![组设置](docs/screenshots/5_Settings_Group.png)
 
 ## 作者
 
-[@S2OUnicus](https://github.com/S2OUnicus)
+- 作者: [@S2OUnicus](https://github.com/S2OUnicus)
+- 项目: <https://github.com/S2OUnicus/DriveMind>
+
+## 许可证
+
+本项目以 `CC-BY-NC-ND-4.0` 发布。
+
+不允许商业使用，也不允许再分发修改版本。详情请查看 `LICENSE`。

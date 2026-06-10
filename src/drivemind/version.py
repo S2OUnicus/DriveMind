@@ -1,6 +1,6 @@
 APP_NAME = "DriveMind"
 APP_TITLE = "DriveMind - ディスク構造マインドマップ生成"
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 GITHUB_OWNER = "S2OUnicus"
 GITHUB_REPO = "DriveMind"
 GITHUB_PROJECT_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"

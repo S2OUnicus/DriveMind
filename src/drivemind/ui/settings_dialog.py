@@ -36,6 +36,8 @@ from PySide6.QtWidgets import (
 from drivemind.core.config import DEFAULT_SETTINGS, ConfigManager
 from drivemind.core.models import DeviceInfo, DiskSnapshot, VolumeInfo
 from drivemind.core.update_checker import check_latest_release, today_iso
+from drivemind.core.formatting import format_bytes
+from drivemind.core.app_logger import configure_logging, delete_all_logs, log_dir, log_total_size, open_log_folder
 from drivemind.ui.i18n import LANGUAGES, tr
 
 
@@ -371,6 +373,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self.group_tab, "グループ")
         self.tabs.addTab(self.purpose_tab, "用途管理")
         self.tabs.addTab(self.memo_tab, "メモ管理")
+        self._build_log_tab()
         self._build_other_tab()
 
         bottom = QHBoxLayout()
@@ -509,6 +512,15 @@ class SettingsDialog(QDialog):
         self.include_extensions_cb = QCheckBox("ファイルの拡張子を出力する", tab)
         form.addRow("拡張子", self.include_extensions_cb)
 
+        self.output_device_name_cb = QCheckBox("デバイス名を出力する（オンの場合は従来のデバイス > パーティション構造）", tab)
+        form.addRow("出力構造", self.output_device_name_cb)
+
+        self.include_program_folders_cb = QCheckBox("プログラムフォルダも中身まで出力する", tab)
+        form.addRow("プログラムフォルダ", self.include_program_folders_cb)
+
+        self.adobe_project_folder_only_cb = QCheckBox("Adobe系プロジェクトはフォルダだけ出力する", tab)
+        form.addRow("Adobeプロジェクト", self.adobe_project_folder_only_cb)
+
         self.max_depth_spin = QSpinBox(tab)
         self.max_depth_spin.setRange(1, 128)
         form.addRow("初期最大フォルダ階層", self.max_depth_spin)
@@ -521,6 +533,47 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
         layout.addStretch(1)
         self.tabs.addTab(tab, "マインドマップ")
+
+    def _build_log_tab(self) -> None:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+        form = QFormLayout()
+
+        self.log_level_combo = QComboBox(tab)
+        self.log_level_combo.addItem("Debug", "debug")
+        self.log_level_combo.addItem("Info", "info")
+        self.log_level_combo.addItem("Warning", "warning")
+        self.log_level_combo.addItem("Error", "error")
+        form.addRow("ログ完全度", self.log_level_combo)
+
+        self.log_keep_days_spin = QSpinBox(tab)
+        self.log_keep_days_spin.setRange(1, 3650)
+        self.log_keep_days_spin.setSuffix(" 日")
+        form.addRow("保留日数", self.log_keep_days_spin)
+
+        self.log_max_size_spin = QSpinBox(tab)
+        self.log_max_size_spin.setRange(1, 4096)
+        self.log_max_size_spin.setSuffix(" MB")
+        form.addRow("サイズ制限", self.log_max_size_spin)
+
+        layout.addLayout(form)
+        info = QLabel(f"ログは {log_dir()} に .log ファイルとして保存されます。", tab)
+        info.setWordWrap(True)
+        layout.addWidget(info)
+        self.log_size_label = QLabel("現在のログサイズ: 計算中", tab)
+        layout.addWidget(self.log_size_label)
+
+        row = QHBoxLayout()
+        self.open_log_button = QPushButton("ログを開く", tab)
+        self.delete_log_button = QPushButton("ログを全部削除", tab)
+        self.open_log_button.clicked.connect(self._open_logs)
+        self.delete_log_button.clicked.connect(self._delete_logs)
+        row.addWidget(self.open_log_button)
+        row.addWidget(self.delete_log_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        layout.addStretch(1)
+        self.tabs.addTab(tab, "ログ")
 
     def _build_other_tab(self) -> None:
         tab = QWidget(self)
@@ -581,8 +634,20 @@ class SettingsDialog(QDialog):
         self.include_system_cb.setChecked(bool(self.config.get("mindmap.include_system", False)))
         self.include_files_cb.setChecked(bool(self.config.get("mindmap.include_files", False)))
         self.include_extensions_cb.setChecked(bool(self.config.get("mindmap.include_extensions", True)))
+        self.output_device_name_cb.setChecked(bool(self.config.get("mindmap.output_device_name", False)))
+        self.include_program_folders_cb.setChecked(bool(self.config.get("mindmap.include_program_folders", False)))
+        self.adobe_project_folder_only_cb.setChecked(bool(self.config.get("mindmap.adobe_project_folder_only", True)))
         self.max_depth_spin.setValue(int(self.config.get("mindmap.max_depth", 48)))
         self.max_files_spin.setValue(int(self.config.get("mindmap.max_files_per_folder", 16)))
+        log_idx = self.log_level_combo.findData(str(self.config.get("log.level", "warning")).lower())
+        self.log_level_combo.setCurrentIndex(max(log_idx, 0))
+        self.log_keep_days_spin.setValue(int(self.config.get("log.keep_days", 7)))
+        self.log_max_size_spin.setValue(int(self.config.get("log.max_size_mb", 64)))
+        if hasattr(self, "log_size_label"):
+            try:
+                self.log_size_label.setText(f"現在のログサイズ: {format_bytes(log_total_size(), 2)}")
+            except Exception:
+                self.log_size_label.setText("現在のログサイズ: 取得できません")
         freq = self.config.get("other.update_check_frequency", "daily")
         idx = self.update_freq_combo.findData(freq)
         self.update_freq_combo.setCurrentIndex(max(idx, 0))
@@ -610,6 +675,28 @@ class SettingsDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(self, "DesktopNaotuを選択", str(Path.home()), "Executable (*.exe);;All files (*.*)")
         if path:
             self.naotu_path_edit.setText(path)
+
+    def _open_logs(self) -> None:
+        try:
+            open_log_folder()
+        except Exception as exc:
+            QMessageBox.warning(self, "ログ", f"ログフォルダを開けませんでした。\n{exc}")
+
+    def _delete_logs(self) -> None:
+        reply = QMessageBox.warning(
+            self,
+            "ログを全部削除",
+            "すべてのログファイルを削除します。\n本当に続行しますか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        count = delete_all_logs()
+        configure_logging(self.config)
+        if hasattr(self, "log_size_label"):
+            self.log_size_label.setText(f"現在のログサイズ: {format_bytes(log_total_size(), 2)}")
+        QMessageBox.information(self, "ログ削除", f"削除したログファイル: {count} 件")
 
     def _check_now(self) -> None:
         self.check_now_button.setEnabled(False)
@@ -677,6 +764,8 @@ class SettingsDialog(QDialog):
             self.config.settings.setdefault("catalogs", {})["memos"] = []
             for note in self.config.settings.get("drive_notes", {}).values():
                 note["memo"] = ""
+        elif tab_name == "ログ":
+            self.config.settings["log"] = deepcopy(DEFAULT_SETTINGS["log"])
         elif tab_name == "その他":
             self.config.settings["other"] = deepcopy(DEFAULT_SETTINGS["other"])
         self._load_values()
@@ -707,10 +796,17 @@ class SettingsDialog(QDialog):
         self.config.set("mindmap.include_system", self.include_system_cb.isChecked())
         self.config.set("mindmap.include_files", self.include_files_cb.isChecked())
         self.config.set("mindmap.include_extensions", self.include_extensions_cb.isChecked())
+        self.config.set("mindmap.output_device_name", self.output_device_name_cb.isChecked())
+        self.config.set("mindmap.include_program_folders", self.include_program_folders_cb.isChecked())
+        self.config.set("mindmap.adobe_project_folder_only", self.adobe_project_folder_only_cb.isChecked())
         self.config.set("mindmap.max_depth", self.max_depth_spin.value())
         self.config.set("mindmap.max_files_per_folder", self.max_files_spin.value())
+        self.config.set("log.level", self.log_level_combo.currentData())
+        self.config.set("log.keep_days", self.log_keep_days_spin.value())
+        self.config.set("log.max_size_mb", self.log_max_size_spin.value())
         self.config.set("other.update_check_frequency", self.update_freq_combo.currentData())
         self.config.save()
+        configure_logging(self.config)
         super().accept()
 
     def reject(self) -> None:

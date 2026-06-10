@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import ctypes
+import logging
 import os
 import subprocess
 import sys
@@ -37,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from drivemind.core.config import ConfigManager
+from drivemind.core.app_logger import configure_logging
 from drivemind.core.disk_scanner import DriveScanner
 from drivemind.core.mindmap import MindmapExporter
 from drivemind.core.models import DeviceInfo, DiskSnapshot, VolumeInfo
@@ -52,8 +55,17 @@ from drivemind.ui.theme import apply_theme
 
 
 
+logger = logging.getLogger(__name__)
+
 
 def asset_path(name: str) -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        candidate = Path(sys._MEIPASS) / "drivemind" / "assets" / name  # type: ignore[attr-defined]
+        if candidate.exists():
+            return candidate
+        candidate = Path(sys._MEIPASS) / "assets" / name  # type: ignore[attr-defined]
+        if candidate.exists():
+            return candidate
     return Path(__file__).resolve().parents[1] / "assets" / name
 
 
@@ -178,6 +190,44 @@ class MindmapExportOptionsDialog(QDialog):
     def max_files_per_folder(self) -> int:
         return self.max_files_spin.value()
 
+
+
+class MindmapOpenChoiceDialog(QDialog):
+    def __init__(self, last_path: str, parent=None) -> None:
+        super().__init__(parent)
+        self.choice = ""
+        self.last_path = last_path
+        self.setWindowTitle("木閲覧")
+        root = QVBoxLayout(self)
+        note = QLabel("開くマインドマップを選択してください。", self)
+        note.setWordWrap(True)
+        root.addWidget(note)
+        row = QHBoxLayout()
+        self.recent_button = QPushButton("最近のマップ", self)
+        self.any_button = QPushButton("任意マップ", self)
+        exists = bool(last_path and Path(last_path).exists())
+        self.recent_button.setEnabled(exists)
+        if exists:
+            self.recent_button.setToolTip(last_path)
+        else:
+            self.recent_button.setToolTip("最近生成したマップが見つかりません。")
+        self.recent_button.clicked.connect(self._choose_recent)
+        self.any_button.clicked.connect(self._choose_any)
+        row.addWidget(self.recent_button)
+        row.addWidget(self.any_button)
+        root.addLayout(row)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel, self)
+        buttons.button(QDialogButtonBox.Cancel).setText("キャンセル")
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _choose_recent(self) -> None:
+        self.choice = "recent"
+        self.accept()
+
+    def _choose_any(self) -> None:
+        self.choice = "any"
+        self.accept()
 
 class MainWindow(QMainWindow):
     COL_SELECT = 0
@@ -304,18 +354,20 @@ class MainWindow(QMainWindow):
         button_row = QHBoxLayout()
         self.refresh_button = QPushButton(tr(self.language, "action_refresh"), bottom)
         self.info_button = QPushButton(tr(self.language, "action_disk_info"), bottom)
-        self.export_button = QPushButton(tr(self.language, "action_export"), bottom)
+        self.export_button = QPushButton("選択した木生成", bottom)
+        self.folder_export_button = QPushButton("フォルダ木生成", bottom)
         self.open_button = LongPressButton(tr(self.language, "action_open"), bottom)
         self.settings_button = QPushButton(tr(self.language, "action_settings"), bottom)
 
         self.refresh_button.clicked.connect(self.refresh_disks)
         self.info_button.clicked.connect(self._open_info_dialog)
         self.export_button.clicked.connect(self._export_mindmap)
-        self.open_button.clicked.connect(self._open_last_mindmap)
+        self.folder_export_button.clicked.connect(self._export_folder_mindmap)
+        self.open_button.clicked.connect(self._open_mindmap_choice)
         self.open_button.longPressed.connect(self._open_selected_mindmap)
         self.settings_button.clicked.connect(self._open_settings)
 
-        for button in [self.refresh_button, self.info_button, self.export_button, self.open_button, self.settings_button]:
+        for button in [self.refresh_button, self.info_button, self.export_button, self.folder_export_button, self.open_button, self.settings_button]:
             button_row.addWidget(button)
         button_row.addStretch(1)
         bottom_layout.addLayout(button_row)
@@ -339,11 +391,14 @@ class MainWindow(QMainWindow):
         self.file_menu.addAction(self.exit_action)
 
         self.tree_menu = self.menuBar().addMenu(tr(self.language, "menu_mindmap"))
-        self.export_action = QAction(tr(self.language, "action_export"), self)
+        self.export_action = QAction("選択した木生成", self)
         self.export_action.triggered.connect(self._export_mindmap)
+        self.folder_export_action = QAction("フォルダ木生成", self)
+        self.folder_export_action.triggered.connect(self._export_folder_mindmap)
         self.open_action = QAction(tr(self.language, "action_open"), self)
-        self.open_action.triggered.connect(self._open_last_mindmap)
+        self.open_action.triggered.connect(self._open_mindmap_choice)
         self.tree_menu.addAction(self.export_action)
+        self.tree_menu.addAction(self.folder_export_action)
         self.tree_menu.addAction(self.open_action)
 
         self.info_menu = self.menuBar().addMenu(tr(self.language, "menu_info"))
@@ -417,7 +472,8 @@ class MainWindow(QMainWindow):
             self.refresh_action.setText(tr(self.language, "action_refresh"))
             self.settings_action.setText(tr(self.language, "action_settings"))
             self.exit_action.setText(tr(self.language, "action_exit"))
-            self.export_action.setText(tr(self.language, "action_export"))
+            self.export_action.setText("選択した木生成")
+            self.folder_export_action.setText("フォルダ木生成")
             self.open_action.setText(tr(self.language, "action_open"))
             self.disk_info_action.setText(tr(self.language, "action_disk_info"))
             self.about_action.setText(tr(self.language, "action_about"))
@@ -425,7 +481,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "refresh_button"):
             self.refresh_button.setText(tr(self.language, "action_refresh"))
             self.info_button.setText(tr(self.language, "action_disk_info"))
-            self.export_button.setText(tr(self.language, "action_export"))
+            self.export_button.setText("選択した木生成")
+            self.folder_export_button.setText("フォルダ木生成")
             self.open_button.setText(tr(self.language, "action_open"))
             self.settings_button.setText(tr(self.language, "action_settings"))
             self._update_summary_bars()
@@ -470,7 +527,7 @@ class MainWindow(QMainWindow):
             self.loading_overlay.raise_()
         else:
             self.loading_overlay.hide()
-        for button_name in ["refresh_button", "info_button", "export_button", "open_button", "settings_button"]:
+        for button_name in ["refresh_button", "info_button", "export_button", "folder_export_button", "open_button", "settings_button"]:
             button = getattr(self, button_name, None)
             if button is not None:
                 button.setEnabled(not visible)
@@ -537,6 +594,7 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
         if self.snapshot.errors:
+            logger.warning("disk refresh completed with %s warnings", len(self.snapshot.errors))
             self.statusBar().showMessage(f"更新完了（注意 {len(self.snapshot.errors)} 件）", 5000)
         else:
             self.statusBar().showMessage("更新完了", 3000)
@@ -828,7 +886,18 @@ class MainWindow(QMainWindow):
         return keys
 
     def _open_info_dialog(self) -> None:
-        dialog = InfoDialog(self.snapshot, self.scanner, self.config, self)
+        self._set_loading_visible(True, "ディスク情報を準備中...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            dialog = InfoDialog(self.snapshot, self.scanner, self.config, self)
+        except Exception as exc:
+            logger.exception("failed to open disk info dialog")
+            QMessageBox.warning(self, "ディスク情報", f"ディスク情報を開けませんでした。\n{exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._set_loading_visible(False)
         dialog.exec()
 
     def _export_mindmap(self, selected_override: set[str] | None = None) -> None:
@@ -857,6 +926,7 @@ class MainWindow(QMainWindow):
                 max_files_per_folder=options.max_files_per_folder,
             )
         except Exception as exc:
+            logger.exception("mindmap export failed")
             QApplication.restoreOverrideCursor()
             self._set_loading_visible(False)
             QMessageBox.warning(self, "出力失敗", f"マインドマップを出力できませんでした。\n{exc}")
@@ -864,6 +934,42 @@ class MainWindow(QMainWindow):
         QApplication.restoreOverrideCursor()
         self._set_loading_visible(False)
         message = f"マインドマップを出力しました。\n{output}"
+        if exporter.errors:
+            message += f"\n\n読み取りできなかった項目: {len(exporter.errors)} 件"
+        QMessageBox.information(self, "出力完了", message)
+
+    def _export_folder_mindmap(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "フォルダを選択", str(Path.home()))
+        if not folder:
+            return
+        options = MindmapExportOptionsDialog(self.config, self)
+        if options.exec() != QDialog.Accepted:
+            return
+        default_name = f"DriveMind_{Path(folder).name or 'folder'}.km"
+        path, _ = QFileDialog.getSaveFileName(self, "マインドマップを保存", str(Path.home() / default_name), "DesktopNaotu Mindmap (*.km);;All files (*.*)")
+        if not path:
+            return
+        if not path.lower().endswith(".km"):
+            path += ".km"
+        exporter = MindmapExporter(self.config)
+        self._set_loading_visible(True, "フォルダ木を生成中...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            output = exporter.export_folder(
+                folder,
+                path,
+                max_depth=options.max_depth,
+                max_files_per_folder=options.max_files_per_folder,
+            )
+        except Exception as exc:
+            logger.exception("folder mindmap export failed")
+            QMessageBox.warning(self, "出力失敗", f"フォルダ木を出力できませんでした。\n{exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._set_loading_visible(False)
+        message = f"フォルダ木を出力しました。\n{output}"
         if exporter.errors:
             message += f"\n\n読み取りできなかった項目: {len(exporter.errors)} 件"
         QMessageBox.information(self, "出力完了", message)
@@ -900,19 +1006,34 @@ class MainWindow(QMainWindow):
         self.config.save()
 
     def _ensure_naotu_path(self) -> str:
-        path = str(self.config.get("desktop_naotu.exe_path", "")).strip()
-        if path and Path(path).exists():
+        path = str(self.config.get("desktop_naotu.exe_path", "")).strip().strip('"').strip("'")
+        if path and Path(path).expanduser().exists():
             return path
         selected, _ = QFileDialog.getOpenFileName(self, "DesktopNaotuを選択", str(Path.home()), "Executable (*.exe);;All files (*.*)")
         if selected:
+            selected = selected.strip().strip('"').strip("'")
             self.config.set("desktop_naotu.exe_path", selected)
             self.config.save()
         return selected
 
+    def _open_mindmap_choice(self) -> None:
+        last_path = str(self.config.get("runtime.last_export_path", "")).strip()
+        dialog = MindmapOpenChoiceDialog(last_path, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        if dialog.choice == "recent":
+            if not last_path or not Path(last_path).exists():
+                QMessageBox.information(self, "木閲覧", "最近生成したマインドマップが見つかりません。")
+                return
+            self._open_mindmap_file(last_path)
+        elif dialog.choice == "any":
+            self._open_selected_mindmap()
+
     def _open_last_mindmap(self) -> None:
+        # 旧ショートカット互換用。通常は _open_mindmap_choice を使います。
         path = str(self.config.get("runtime.last_export_path", "")).strip()
         if not path or not Path(path).exists():
-            self._open_selected_mindmap()
+            QMessageBox.information(self, "木閲覧", "最近生成したマインドマップが見つかりません。")
             return
         self._open_mindmap_file(path)
 
@@ -923,20 +1044,71 @@ class MainWindow(QMainWindow):
             self.config.save()
             self._open_mindmap_file(path)
 
+    def _clean_path_text(self, value: str) -> str:
+        return (value or "").strip().strip('"').strip("'")
+
     def _open_mindmap_file(self, km_path: str) -> None:
-        exe = self._ensure_naotu_path()
+        km_text = self._clean_path_text(km_path)
+        if not km_text:
+            QMessageBox.warning(self, "ファイルなし", "マインドマップファイルが指定されていません。")
+            return
+        km_path_obj = Path(km_text).expanduser()
+        if not km_path_obj.exists() or not km_path_obj.is_file():
+            QMessageBox.warning(self, "ファイルなし", f"マインドマップファイルが見つかりません。\n{km_path_obj}")
+            return
+        exe = self._clean_path_text(self._ensure_naotu_path())
         if not exe:
             return
+        exe_path = Path(exe).expanduser()
+        if not exe_path.exists() or not exe_path.is_file():
+            QMessageBox.warning(self, "DesktopNaotuなし", f"DesktopNaotu実行ファイルが見つかりません。\n{exe_path}")
+            self.config.set("desktop_naotu.exe_path", "")
+            self.config.save()
+            return
+
+        # DesktopNaotu は次の単純な形式で .km を開けます。
+        #   DesktopNaotu.exe DriveMind.km
+        # Path.resolve() は Windows の subst / 仮想ドライブで意図しない変換を行う場合があるため、
+        # ここでは選択されたパスをできるだけそのまま渡します。
+        exe_str = os.path.normpath(str(exe_path))
+        km_str = os.path.normpath(str(km_path_obj))
         try:
-            popen_hidden([exe, km_path])
+            logger.info("DesktopNaotu launch command: %s %s", exe_str, km_str)
+            if os.name == "nt":
+                # GUI アプリの起動は ShellExecuteW の方が Explorer / コマンド実行に近く、
+                # DesktopNaotu.exe <map.km> の引数もそのまま渡せます。
+                result = ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+                    None,
+                    "open",
+                    exe_str,
+                    f'"{km_str}"',
+                    str(exe_path.parent),
+                    1,
+                )
+                if int(result) <= 32:
+                    raise OSError(f"ShellExecuteW failed: code={int(result)}")
+            else:
+                subprocess.Popen([exe_str, km_str], cwd=str(exe_path.parent))
+            self.config.set("runtime.last_export_path", km_str)
+            self.config.save()
         except Exception as exc:
+            logger.exception("DesktopNaotu launch failed")
             try:
+                # 最後の保険として Windows の関連付けで開きます。
                 if os.name == "nt":
-                    os.startfile(km_path)  # type: ignore[attr-defined]
+                    os.startfile(km_str)  # type: ignore[attr-defined]
+                    logger.info("mindmap opened by file association: %s", km_str)
                     return
             except Exception:
                 pass
-            QMessageBox.warning(self, "起動失敗", f"DesktopNaotuで開けませんでした。\n{exc}")
+            QMessageBox.warning(
+                self,
+                "起動失敗",
+                "DesktopNaotuで開けませんでした。\n\n"
+                f"実行ファイル: {exe_str}\n"
+                f"マップ: {km_str}\n\n"
+                f"エラー: {exc}",
+            )
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.config, self.snapshot, self)
@@ -945,6 +1117,7 @@ class MainWindow(QMainWindow):
             app = QApplication.instance()
             if app is not None:
                 apply_theme(app, str(self.config.get("basic.theme", "dark")))
+            configure_logging(self.config)
             self._update_language_ui()
             self._reset_refresh_timer()
             self.autosave_timer.start(int(self.config.get("basic.autosave_minutes", 5)) * 60 * 1000)
