@@ -2,6 +2,17 @@
 
 [日本語](CHANGELOG.md) / [English](CHANGELOG.EN.md) / [中文](CHANGELOG.ZH.md) / [한국어](CHANGELOG.KR.md)
 
+## v3.2.0
+
+### Fixed
+
+- Fixed an issue where the disk list could appear empty when DriveMind was started without administrator privileges.
+- Improved fallback behavior so DriveMind can continue scanning with psutil when PowerShell-based disk detection fails or times out.
+- Added a secondary `psutil.disk_partitions(all=True)` scan when `all=False` returns no partitions.
+- Fixed an issue where normal non-BitLocker partitions could be displayed with the `🔓` icon.
+- Improved BitLocker detection by combining ProtectionStatus, VolumeStatus, LockStatus, and EncryptionPercentage.
+- Updated the version number to `v3.2.0`.
+
 ## v3.1.0
 
 ### Added

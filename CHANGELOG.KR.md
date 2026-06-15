@@ -2,6 +2,17 @@
 
 [日本語](CHANGELOG.md) / [English](CHANGELOG.EN.md) / [中文](CHANGELOG.ZH.md) / [한국어](CHANGELOG.KR.md)
 
+## v3.2.0
+
+### 수정
+
+- 관리자 권한 없이 실행했을 때 디스크 목록이 비어 보일 수 있는 문제를 수정했습니다.
+- PowerShell 기반 디스크 정보 수집이 실패하거나 시간 초과될 경우에도 psutil 기반 스캔으로 계속 진행하도록 개선했습니다.
+- `psutil.disk_partitions(all=False)` 가 빈 목록을 반환할 경우 `all=True` 로 다시 스캔하는 보조 처리를 추가했습니다.
+- BitLocker 를 사용하지 않는 일반 파티션도 `🔓` 로 표시될 수 있는 문제를 수정했습니다.
+- ProtectionStatus, VolumeStatus, LockStatus, EncryptionPercentage 를 조합하여 BitLocker 상태 판정을 개선했습니다.
+- 버전 번호를 `v3.2.0` 으로 업데이트했습니다.
+
 ## v3.1.0
 
 ### 추가

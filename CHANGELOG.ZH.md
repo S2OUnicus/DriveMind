@@ -2,6 +2,17 @@
 
 [日本語](CHANGELOG.md) / [English](CHANGELOG.EN.md) / [中文](CHANGELOG.ZH.md) / [한국어](CHANGELOG.KR.md)
 
+## v3.2.0
+
+### 修复
+
+- 修复在非管理员权限启动时，磁盘列表可能为空的问题。
+- 当基于 PowerShell 的磁盘信息获取失败或超时时，改进为继续使用 psutil 方式进行备用扫描。
+- 当 `psutil.disk_partitions(all=False)` 返回空列表时，追加使用 `all=True` 重新扫描的补助处理。
+- 修复普通非 BitLocker 分区也被显示为 `🔓` 的问题。
+- 改进 BitLocker 状态判断，结合 ProtectionStatus、VolumeStatus、LockStatus 和 EncryptionPercentage 进行判断。
+- 将版本号更新为 `v3.2.0`。
+
 ## v3.1.0
 
 ### 新增

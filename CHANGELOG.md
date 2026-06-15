@@ -2,6 +2,17 @@
 
 [日本語](CHANGELOG.md) / [English](CHANGELOG.EN.md) / [中文](CHANGELOG.ZH.md) / [한국어](CHANGELOG.KR.md)
 
+## v3.2.0
+
+### 修正
+
+- 非管理者権限で起動した場合に、ディスクリストが空になることがある問題を修正
+- PowerShell によるディスク情報取得が失敗・タイムアウトした場合でも、psutil ベースの取得へフォールバックするよう改善
+- `psutil.disk_partitions(all=False)` が空の場合、`all=True` で再取得する補助処理を追加
+- BitLocker 未使用の通常パーティションまで `🔓` と表示される問題を修正
+- BitLocker 状態判定を、ProtectionStatus / VolumeStatus / LockStatus / EncryptionPercentage を組み合わせる方式に改善
+- バージョン番号を `v3.2.0` に更新
+
 ## v3.1.0
 
 ### 追加

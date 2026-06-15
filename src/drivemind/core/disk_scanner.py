@@ -41,17 +41,34 @@ def _windows_subprocess_kwargs() -> dict[str, Any]:
 
 
 def _powershell_json(script: str, timeout: int = 10) -> dict[str, Any]:
+    """PowerShell を JSON 取得用に実行します。
+
+    非管理者環境では Get-Disk / Get-PhysicalDisk などが遅延・失敗する場合があります。
+    ここで例外を外へ出すと、GUI 起動時にディスクリスト全体が空になるため、
+    失敗時は空 dict を返し、psutil ベースの取得へフォールバックさせます。
+    """
     if os.name != "nt":
         return {}
     command = [
         "powershell",
         "-NoProfile",
+        "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
         script,
     ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False, **_windows_subprocess_kwargs())
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            **_windows_subprocess_kwargs(),
+        )
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return {}
     if result.returncode != 0 or not result.stdout.strip():
         return {}
     try:
@@ -140,7 +157,15 @@ $logical = Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,DriveType,
 $bitlocker = @()
 try {
   if (Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue) {
-    $bitlocker = Get-BitLockerVolume | Select-Object MountPoint,VolumeStatus,ProtectionStatus,LockStatus,EncryptionPercentage
+    $bitlocker = Get-BitLockerVolume | ForEach-Object {
+      [PSCustomObject]@{
+        MountPoint = $_.MountPoint
+        VolumeStatus = if ($null -ne $_.VolumeStatus) { $_.VolumeStatus.ToString() } else { '' }
+        ProtectionStatus = if ($null -ne $_.ProtectionStatus) { $_.ProtectionStatus.ToString() } else { '' }
+        LockStatus = if ($null -ne $_.LockStatus) { $_.LockStatus.ToString() } else { '' }
+        EncryptionPercentage = $_.EncryptionPercentage
+      }
+    }
   }
 } catch {}
 [PSCustomObject]@{Disks=$disks;Win32=$win32;Partitions=$parts;Volumes=$volumes;Links=$links;Physical=$physical;Logical=$logical;BitLocker=$bitlocker} | ConvertTo-Json -Depth 8 -Compress
@@ -347,13 +372,46 @@ def _ntfs_version(drive: str) -> str:
 
 
 def _bitlocker_icon(meta: dict[str, Any], device: DeviceInfo | None = None) -> str:
-    """ファイルシステム列に付ける状態アイコンを決めます。"""
+    """ファイルシステム列に付ける状態アイコンを決めます。
+
+    Get-BitLockerVolume は BitLocker 未使用の通常ボリュームも返す場合があります。
+    そのため meta が存在するだけで BitLocker 使用中とは判断しません。
+    """
     if meta:
-        text = " ".join(str(meta.get(k, "")) for k in ["VolumeStatus", "ProtectionStatus", "LockStatus", "EncryptionPercentage"]).lower()
-        used = not ("fullydecrypted" in text and ("off" in text or "0" in text))
-        if used:
-            locked = "locked" in str(meta.get("LockStatus", "")).lower()
+        volume_status = str(meta.get("VolumeStatus", "")).strip().lower()
+        protection_status = str(meta.get("ProtectionStatus", "")).strip().lower()
+        lock_status = str(meta.get("LockStatus", "")).strip().lower()
+        try:
+            encryption = float(str(meta.get("EncryptionPercentage", "0") or 0))
+        except Exception:
+            encryption = 0.0
+
+        fully_decrypted = volume_status in {"fullydecrypted", "fully decrypted", "0"}
+        protection_off = protection_status in {"off", "0", "false", ""}
+        unlocked_words = {"unlocked", "0", "false", ""}
+        locked = lock_status in {"locked", "1", "true"}
+
+        encrypted_statuses = {
+            "fullyencrypted",
+            "fully encrypted",
+            "encryptioninprogress",
+            "encryption in progress",
+            "decryptioninprogress",
+            "decryption in progress",
+            "encryptionsuspended",
+            "encryption suspended",
+            "wipedencryptioninprogress",
+            "wipe encryption in progress",
+        }
+        bitlocker_used = (
+            locked
+            or protection_status in {"on", "1", "true"}
+            or encryption > 0
+            or volume_status in encrypted_statuses
+        )
+        if bitlocker_used:
             return "🔐" if locked else "🔓"
+
     if device is not None and device.is_internal:
         return "💾"
     return "💿"
@@ -450,6 +508,10 @@ class DriveScanner:
             system_to_display[system_index] = display_index
 
         partitions = psutil.disk_partitions(all=False)
+        if not partitions:
+            # 非管理者環境や一部の仮想環境では all=False が空になる場合があります。
+            # その場合は all=True で再取得し、後続の設定フィルターで不要な項目を除外します。
+            partitions = psutil.disk_partitions(all=True)
         order_all = 0
         per_device_count: dict[int, int] = {}
         unknown_display_index: int | None = None
