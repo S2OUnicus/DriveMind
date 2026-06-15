@@ -20,6 +20,8 @@
     "show_ram_disks": false,
     "show_web_disks": false,
     "show_remote_disks": false,
+    "show_small_unidentified_disks": false,
+    "always_show_uuid": false,
     "run_as_admin": false
   },
   "desktop_naotu": {

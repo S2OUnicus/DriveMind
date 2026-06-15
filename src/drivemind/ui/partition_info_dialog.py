@@ -332,18 +332,66 @@ def _open_path(path: str) -> None:
 def _open_parent_select(path: str) -> None:
     file_path = Path(path)
     if os.name == "nt":
-        subprocess.Popen(["explorer", f"/select,{file_path}"], **_windows_no_console_kwargs())
+        # explorer.exe は引数内のカンマ・空白・日本語パスで失敗しやすいため、
+        # ShellExecuteW に /select,"..." 形式で渡します。失敗時は親フォルダを開きます。
+        params = f'/select,"{str(file_path)}"'
+        result = ctypes.windll.shell32.ShellExecuteW(None, "open", "explorer.exe", params, None, 1)  # type: ignore[attr-defined]
+        if int(result) <= 32:
+            parent = str(file_path.parent)
+            fallback = ctypes.windll.shell32.ShellExecuteW(None, "open", parent, None, None, 1)  # type: ignore[attr-defined]
+            if int(fallback) <= 32:
+                raise OSError(f"explorer open failed: code={int(result)} / fallback={int(fallback)}")
     else:
         _open_path(str(file_path.parent))
 
 
 def _show_system_file_properties(path: str) -> None:
-    if os.name == "nt":
-        result = ctypes.windll.shell32.ShellExecuteW(None, "properties", str(path), None, None, 1)  # type: ignore[attr-defined]
-        if int(result) <= 32:
-            raise OSError(f"ShellExecuteW properties failed: code={int(result)}")
-    else:
+    if os.name != "nt":
         raise OSError("この環境ではシステムのファイルプロパティを呼び出せません。")
+
+    file_path = str(Path(path))
+
+    # まず SHObjectProperties を使います。ShellExecuteW の properties verb は
+    # 一部のファイル種類や関連付けで code=31 を返すことがあります。
+    try:
+        shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+        shell32.SHObjectProperties.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_wchar_p]
+        shell32.SHObjectProperties.restype = ctypes.c_int
+        if shell32.SHObjectProperties(None, 0x00000002, file_path, None):
+            return
+    except Exception:
+        pass
+
+    # フォールバック: ShellExecuteExW + SEE_MASK_INVOKEIDLIST。
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.c_ulong),
+            ("fMask", ctypes.c_ulong),
+            ("hwnd", ctypes.c_void_p),
+            ("lpVerb", ctypes.c_wchar_p),
+            ("lpFile", ctypes.c_wchar_p),
+            ("lpParameters", ctypes.c_wchar_p),
+            ("lpDirectory", ctypes.c_wchar_p),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", ctypes.c_void_p),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", ctypes.c_wchar_p),
+            ("hkeyClass", ctypes.c_void_p),
+            ("dwHotKey", ctypes.c_ulong),
+            ("hIcon", ctypes.c_void_p),
+            ("hProcess", ctypes.c_void_p),
+        ]
+
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
+    info.fMask = 0x0000000C  # SEE_MASK_INVOKEIDLIST
+    info.hwnd = None
+    info.lpVerb = "properties"
+    info.lpFile = file_path
+    info.nShow = 1
+    ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info))  # type: ignore[attr-defined]
+    if not ok:
+        raise OSError(f"ShellExecuteExW properties failed: code={ctypes.get_last_error()}")
 
 
 class FileListDialog(QDialog):

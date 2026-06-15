@@ -2,6 +2,24 @@
 
 [日本語](CHANGELOG.md) / [English](CHANGELOG.EN.md) / [中文](CHANGELOG.ZH.md) / [한국어](CHANGELOG.KR.md)
 
+## v3.3.0
+
+### Fixed
+
+- Fixed an issue where “Open containing folder” in the file list might not respond.
+- Fixed file property display failures such as `ShellExecuteW properties failed: code=31`.
+- Added a default-hidden option for unidentified disks smaller than or equal to 1 MiB.
+
+### Added
+
+- Added tree-style expandable display for structured S.M.A.R.T / reliability values such as `CimClass`.
+- Added drive buttons in the Disk Information panel.
+  - Left-click opens the drive.
+  - Right-click shows “Open drive”, “Drive properties”, and “System properties”.
+- UUID / Serial is hidden by default and can be revealed with a button.
+- Added a Basic Settings option to always show UUID / Serial.
+- Updated the version number to `v3.3.0`.
+
 ## v3.2.0
 
 ### Fixed

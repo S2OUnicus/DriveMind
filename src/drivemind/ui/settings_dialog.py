@@ -441,9 +441,14 @@ class SettingsDialog(QDialog):
         self.show_ram_disks_cb = QCheckBox("RAMCache / RamDisk などの RAM ディスクを表示する", tab)
         self.show_web_disks_cb = QCheckBox("Google Drive などの WebDisk を表示する", tab)
         self.show_remote_disks_cb = QCheckBox("ネットワーク共有 / リモートドライブを表示する", tab)
+        self.show_small_unidentified_cb = QCheckBox("1MiB以下の未識別ディスクを表示する", tab)
         form.addRow("仮想/リモート", self.show_ram_disks_cb)
         form.addRow("", self.show_web_disks_cb)
         form.addRow("", self.show_remote_disks_cb)
+        form.addRow("", self.show_small_unidentified_cb)
+
+        self.always_show_uuid_cb = QCheckBox("UUID / Serial を常に表示する", tab)
+        form.addRow("プライバシー", self.always_show_uuid_cb)
 
         self.run_as_admin_cb = QCheckBox("次回から管理者として起動する", tab)
         form.addRow("管理者権限", self.run_as_admin_cb)
@@ -625,6 +630,8 @@ class SettingsDialog(QDialog):
         self.show_ram_disks_cb.setChecked(bool(self.config.get("basic.show_ram_disks", False)))
         self.show_web_disks_cb.setChecked(bool(self.config.get("basic.show_web_disks", False)))
         self.show_remote_disks_cb.setChecked(bool(self.config.get("basic.show_remote_disks", False)))
+        self.show_small_unidentified_cb.setChecked(bool(self.config.get("basic.show_small_unidentified_disks", False)))
+        self.always_show_uuid_cb.setChecked(bool(self.config.get("basic.always_show_uuid", False)))
         self.run_as_admin_cb.setChecked(bool(self.config.get("basic.run_as_admin", False)))
         self.config_path_edit.setText(str(self.config.path))
         self.naotu_path_edit.setText(str(self.config.get("desktop_naotu.exe_path", "")))
@@ -787,6 +794,8 @@ class SettingsDialog(QDialog):
         self.config.set("basic.show_ram_disks", self.show_ram_disks_cb.isChecked())
         self.config.set("basic.show_web_disks", self.show_web_disks_cb.isChecked())
         self.config.set("basic.show_remote_disks", self.show_remote_disks_cb.isChecked())
+        self.config.set("basic.show_small_unidentified_disks", self.show_small_unidentified_cb.isChecked())
+        self.config.set("basic.always_show_uuid", self.always_show_uuid_cb.isChecked())
         self.config.set("basic.run_as_admin", self.run_as_admin_cb.isChecked())
         self.config.set("desktop_naotu.exe_path", self.naotu_path_edit.text().strip())
         excludes = [line.strip() for line in self.exclude_text.toPlainText().splitlines() if line.strip()]

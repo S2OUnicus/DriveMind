@@ -42,6 +42,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "show_ram_disks": False,
         "show_web_disks": False,
         "show_remote_disks": False,
+        # 未識別ディスクが 1MiB 以下の場合、初期値では表示しません。
+        "show_small_unidentified_disks": False,
+        # UUID / Serial はプライバシー情報なので初期値では隠します。
+        "always_show_uuid": False,
         # 必要な場合だけ管理者権限で起動します。
         "run_as_admin": False,
     },

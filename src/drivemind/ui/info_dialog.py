@@ -8,13 +8,18 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +29,7 @@ from drivemind.core.disk_scanner import DriveScanner
 from drivemind.core.formatting import format_bytes
 from drivemind.core.models import DeviceInfo, DiskSnapshot
 from drivemind.ui.progress_bar import DiskUsageBar
+from drivemind.ui.partition_info_dialog import PartitionInfoDialog, _open_path, _show_system_file_properties
 
 
 class InfoDialog(QDialog):
@@ -83,6 +89,113 @@ class InfoDialog(QDialog):
         layout.addWidget(table, 1)
         self.tabs.addTab(tab, "総計")
 
+    def _uuid_widget(self, device: DeviceInfo) -> QWidget:
+        widget = QWidget(self)
+        row = QHBoxLayout(widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        always_show = bool(self.config.get("basic.always_show_uuid", False))
+        label = QLabel(device.uuid or "不明", widget) if always_show else QLabel("……", widget)
+        row.addWidget(label, 1)
+        if not always_show:
+            button = QPushButton("UUIDを表す", widget)
+            button.clicked.connect(lambda: label.setText(device.uuid or "不明"))
+            row.addWidget(button, 0)
+        return widget
+
+    def _partition_buttons_widget(self, device: DeviceInfo) -> QWidget:
+        wrapper = QWidget(self)
+        outer = QVBoxLayout(wrapper)
+        outer.setContentsMargins(0, 0, 0, 0)
+        if not device.volumes:
+            outer.addWidget(QLabel("ドライブなし", wrapper))
+            return wrapper
+
+        scroll = QScrollArea(wrapper)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFixedHeight(120)
+        inner = QWidget(scroll)
+        grid = QGridLayout(inner)
+        grid.setContentsMargins(2, 2, 2, 2)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+
+        for i, volume in enumerate(device.volumes):
+            row = i // 6
+            col = i % 6
+            page_col = col + (i // 18) * 6
+            button_text = volume.drive or volume.label or volume.mountpoint
+            if volume.label:
+                button_text = f"{volume.drive} ({volume.label})"
+            button = QPushButton(button_text, inner)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setStyleSheet("QPushButton { border-radius: 9px; padding: 5px 10px; }")
+            button.clicked.connect(lambda checked=False, volume=volume: self._open_volume(volume))
+            button.setContextMenuPolicy(Qt.CustomContextMenu)
+            button.customContextMenuRequested.connect(lambda pos, button=button, volume=volume: self._show_volume_button_menu(button, volume, pos))
+            grid.addWidget(button, row % 3, page_col)
+
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+        return wrapper
+
+    def _open_volume(self, volume) -> None:
+        target = volume.mountpoint or (volume.drive + "\\")
+        try:
+            _open_path(target)
+        except Exception as exc:
+            QMessageBox.warning(self, "起動失敗", f"ドライブを開けませんでした。\n{target}\n\n{exc}")
+
+    def _show_volume_button_menu(self, button: QPushButton, volume, pos) -> None:
+        menu = QMenu(self)
+        open_action = menu.addAction("ドライブを開く")
+        app_prop_action = menu.addAction("ドライブ属性")
+        sys_prop_action = menu.addAction("システム属性")
+        chosen = menu.exec(button.mapToGlobal(pos))
+        if chosen == open_action:
+            self._open_volume(volume)
+        elif chosen == app_prop_action:
+            PartitionInfoDialog(self._device_for_volume(volume), volume, self.config, self).exec()
+        elif chosen == sys_prop_action:
+            target = volume.mountpoint or (volume.drive + "\\")
+            try:
+                _show_system_file_properties(target)
+            except Exception as exc:
+                QMessageBox.warning(self, "表示失敗", f"システム属性を表示できませんでした。\n{target}\n\n{exc}")
+
+    def _device_for_volume(self, volume) -> DeviceInfo:
+        for device in self.snapshot.devices:
+            if volume in device.volumes:
+                return device
+        return self.snapshot.devices[0] if self.snapshot.devices else DeviceInfo(index=0)
+
+    def _add_tree_value(self, parent: QTreeWidgetItem, key: str, value) -> None:
+        labels = {
+            "Temperature": "温度",
+            "TemperatureMax": "最高温度",
+            "PowerOnHours": "電源投入時間",
+            "ReadErrorsTotal": "読み取りエラー総数",
+            "WriteErrorsTotal": "書き込みエラー総数",
+            "Wear": "消耗率",
+            "DeviceId": "設備ID",
+        }
+        name = labels.get(str(key), str(key))
+        if isinstance(value, dict):
+            item = QTreeWidgetItem([name, ""])
+            parent.addChild(item)
+            for child_key, child_value in value.items():
+                self._add_tree_value(item, str(child_key), child_value)
+            item.setExpanded(str(key).startswith("Cim"))
+        elif isinstance(value, list):
+            item = QTreeWidgetItem([name, ""])
+            parent.addChild(item)
+            for i, child_value in enumerate(value, start=1):
+                self._add_tree_value(item, str(i), child_value)
+            item.setExpanded(str(key).startswith("Cim"))
+        else:
+            parent.addChild(QTreeWidgetItem([name, "" if value is None else str(value)]))
+
     def _device_tab(self, device: DeviceInfo) -> QWidget:
         tab = QWidget(self)
         layout = QVBoxLayout(tab)
@@ -93,21 +206,24 @@ class InfoDialog(QDialog):
         form.addRow("属性", QLabel(device.display_kind, tab))
         form.addRow("インターフェース", QLabel(device.interface, tab))
         form.addRow("パーティション数", QLabel(str(device.partition_count), tab))
-        form.addRow("UUID / Serial", QLabel(device.uuid or "不明", tab))
+        form.addRow("ドライブ", self._partition_buttons_widget(device))
+        form.addRow("UUID / Serial", self._uuid_widget(device))
         layout.addLayout(form)
         layout.addWidget(DiskUsageBar(device.total_used, device.total_free, device.total_capacity, decimals, percent_decimals, tab))
 
-        table = QTableWidget(tab)
-        rows = self.scanner.smart_info(device)
-        table.setColumnCount(2)
-        table.setHorizontalHeaderLabels(["項目", "値"])
-        table.setRowCount(len(rows))
-        for row, (name, value) in enumerate(rows):
-            table.setItem(row, 0, QTableWidgetItem(name))
-            table.setItem(row, 1, QTableWidgetItem(value))
-        table.resizeColumnsToContents()
+        tree = QTreeWidget(tab)
+        tree.setColumnCount(2)
+        tree.setHeaderLabels(["項目", "値"])
+        data = self.scanner.smart_info_data(device)
+        root_item = tree.invisibleRootItem()
+        if isinstance(data, dict):
+            for key, value in data.items():
+                self._add_tree_value(root_item, str(key), value)
+        else:
+            self._add_tree_value(root_item, "状態", data)
+        tree.resizeColumnToContents(0)
         layout.addWidget(QLabel("S.M.A.R.T / 信頼性情報", tab))
-        layout.addWidget(table, 1)
+        layout.addWidget(tree, 1)
         return tab
 
     def _save_report(self) -> None:
@@ -135,7 +251,8 @@ class InfoDialog(QDialog):
             lines.append(f"設備順番: {device.index}")
             lines.append(f"インターフェース: {device.interface}")
             lines.append(f"パーティション数: {device.partition_count}")
-            lines.append(f"UUID / Serial: {device.uuid or '不明'}")
+            uuid_text = (device.uuid or '不明') if bool(self.config.get("basic.always_show_uuid", False)) else '……'
+            lines.append(f"UUID / Serial: {uuid_text}")
             lines.append(f"容量: {format_bytes(device.total_capacity, decimals)}")
             for volume in device.volumes:
                 lines.append(f"  - {volume.drive} {volume.label} {volume.file_system} 使用済み {format_bytes(volume.used, decimals)} / {format_bytes(volume.total, decimals)}")

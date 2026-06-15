@@ -596,7 +596,14 @@ class DriveScanner:
             )
             device.volumes.append(volume)
 
-        return [device_map[key] for key in sorted(device_map.keys())]
+        devices = [device_map[key] for key in sorted(device_map.keys())]
+        if not bool(self.config.get("basic.show_small_unidentified_disks", False)):
+            devices = [
+                device
+                for device in devices
+                if not (device.name == "未識別ディスク" and device.total_capacity <= 1024 * 1024)
+            ]
+        return devices
 
     def _scan_portable(self, errors: list[str]) -> list[DeviceInfo]:
         """Windows以外で開発画面を確認するための簡易取得です。"""
@@ -638,21 +645,29 @@ class DriveScanner:
         devices.append(device)
         return devices
 
-    def smart_info(self, device: DeviceInfo) -> list[tuple[str, str]]:
+    def smart_info_data(self, device: DeviceInfo) -> dict[str, Any]:
+        """S.M.A.R.T / 信頼性情報の生データを取得します。
+
+        UI 側では CimClass などの key-value 構造をツリー表示できるよう、
+        ここでは dict のまま返します。
+        """
         if os.name != "nt" or device.system_index is None:
-            return [("状態", "この環境ではS.M.A.R.T情報を取得できません")]
+            return {"状態": "この環境ではS.M.A.R.T情報を取得できません"}
         script = rf'''
 $ErrorActionPreference = 'SilentlyContinue'
 $pd = Get-PhysicalDisk | Where-Object {{$_.DeviceId -eq {device.system_index}}}
 if ($pd) {{
   $rel = $pd | Get-StorageReliabilityCounter
-  $rel | Select-Object * | ConvertTo-Json -Depth 4 -Compress
+  $rel | Select-Object * | ConvertTo-Json -Depth 8 -Compress
 }}
 '''
         data = _powershell_json(script, timeout=8)
         if not data:
-            return [("状態", "S.M.A.R.T情報を取得できませんでした。管理者権限や対応デバイスが必要な場合があります。")]
-        rows: list[tuple[str, str]] = []
+            return {"状態": "S.M.A.R.T情報を取得できませんでした。管理者権限や対応デバイスが必要な場合があります。"}
+        return data
+
+    def smart_info(self, device: DeviceInfo) -> list[tuple[str, str]]:
+        data = self.smart_info_data(device)
         labels = {
             "Temperature": "温度",
             "TemperatureMax": "最高温度",
@@ -662,9 +677,21 @@ if ($pd) {{
             "Wear": "消耗率",
             "DeviceId": "設備ID",
         }
-        for key, value in data.items():
+        rows: list[tuple[str, str]] = []
+
+        def add_flat(prefix: str, value: Any) -> None:
             if value is None or str(value) == "":
-                continue
+                return
+            if isinstance(value, dict):
+                for child_key, child_value in value.items():
+                    add_flat(f"{prefix} > {child_key}", child_value)
+            elif isinstance(value, list):
+                for i, child_value in enumerate(value, start=1):
+                    add_flat(f"{prefix} > {i}", child_value)
+            else:
+                rows.append((prefix, str(value)))
+
+        for key, value in data.items():
             name = labels.get(key, key)
-            rows.append((name, str(value)))
+            add_flat(name, value)
         return rows or [("状態", "表示できるS.M.A.R.T項目がありません")]
